@@ -1,0 +1,91 @@
+# AIOS — A repository-driven autonomous operating system for solo operators
+
+Self-hosted platform that turns a single GitHub monorepo into an autonomous OS. Claude Code or Codex agents run on schedules, webhooks, or manual triggers across "departments" (top-level folders). All state and behaviour live in the repo; the dashboard is a visual interface, not a state holder.
+
+## What is AIOS
+
+- **Repo is the product.** Every task, goal, skill, and env var is a file in the monorepo.
+- **Dashboard is a view.** It renders what's in the repo and lets you edit it; the repo remains source of truth.
+- **Agents are stateless and interchangeable.** The same folder can run against Claude Code or Codex without code changes.
+- **Concurrency via claims.** One department runs at a time; multiple departments run in parallel.
+
+See [`AIOS-PRD.md`](./AIOS-PRD.md) for the full product specification.
+
+## Features
+
+- Scheduled (cron), webhook, and manual triggers
+- Department folders (`CLAUDE.md`, `cron/`, `goals/`, `skills/`, `.env`, `logs/`)
+- Per-folder claims with backlog queue
+- Two-way GitHub sync (pull before run, commit + push after)
+- System-managed sync layer: `CLAUDE.md ↔ AGENTS.md`, `org.md` propagation, auto-generated `_org.md`
+- Provider-neutral execution (Claude Code or Codex, selectable per task)
+- Telegram / email notifications
+- Embedded terminal, per-run and global kill switches
+- Usage + cost tracking, live streaming output
+
+## Tech stack
+
+- **Backend:** Node.js (dashboard server, heartbeat scanner, execution engine)
+- **Frontend:** React + TypeScript dashboard
+- **Reverse proxy:** Caddy (auto-HTTPS via Let's Encrypt)
+- **Process manager:** systemd
+- **Execution providers:** Claude Code CLI, OpenAI Codex CLI
+- **Source of truth:** GitHub
+- **State:** filesystem (repo) + lightweight embedded store for claims, logs, metrics
+
+## Architecture
+
+```
+Internet ──▶ Caddy (80/443) ──▶ aios server (:3100)
+                                     │
+                         ┌───────────┼────────────┐
+                         ▼           ▼            ▼
+                 heartbeat scanner  exec engine  dashboard API
+                         │           │
+                         └─── reads/writes ───▶ /home/aios/repo ──▶ GitHub
+```
+
+## Quickstart (VPS deploy)
+
+1. **Provision** an Ubuntu/Debian VPS. Open TCP ports **80, 443, 3100**.
+2. **Bootstrap** as root:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/<org>/AIOS-VPS/main/scripts/vps-bootstrap.sh | sudo bash
+   ```
+   Installs Node.js, Caddy (stopped), Claude Code CLI, Codex CLI, creates the `aios` user, drops the systemd unit.
+3. **Sign up** as first admin at `http://<vps-ip>:3100`.
+4. **Attach a domain.** Dashboard walks you through DNS verification, then Caddy provisions HTTPS automatically. See [`onboarding-caddy.md`](./onboarding-caddy.md).
+5. **Authenticate providers.** Connect your Claude subscription (OAuth PKCE) and/or ChatGPT subscription (device auth). See [`onboarding-cli-auth.md`](./onboarding-cli-auth.md).
+6. **Connect GitHub**, pick or create a repo (new repos are scaffolded with `aios.yaml` + a sample department).
+7. **Configure notifications** (Telegram or email).
+8. **Done.** First scheduled task runs within one heartbeat cycle.
+
+Target: fresh VPS to first scheduled run in under 15 minutes, first real task within an hour.
+
+## Repository layout (planned)
+
+```
+/scripts     bootstrap scripts, systemd units
+/server      Node.js dashboard + heartbeat + execution engine
+/ui          React dashboard
+AIOS-PRD.md               product spec
+onboarding-caddy.md       domain + HTTPS setup recipe
+onboarding-cli-auth.md    Claude Code / Codex auth recipe
+PLAN.md                   implementation tracker
+README.md                 this file
+```
+
+## Docs
+
+- [`AIOS-PRD.md`](./AIOS-PRD.md) — full product specification
+- [`onboarding-caddy.md`](./onboarding-caddy.md) — domain attachment + automatic HTTPS
+- [`onboarding-cli-auth.md`](./onboarding-cli-auth.md) — Claude Code + Codex CLI install and auth
+- [`PLAN.md`](./PLAN.md) — current build phase and task tracker
+
+## Status
+
+Early build — see [`PLAN.md`](./PLAN.md) for the current phase.
+
+## License
+
+TBD.
