@@ -47,44 +47,56 @@ Internet ──▶ Caddy (80/443) ──▶ aios server (:3100)
 
 ## Quickstart (VPS deploy)
 
+See [`DEPLOY.md`](./DEPLOY.md) for the full walkthrough. The short version:
+
 1. **Provision** an Ubuntu/Debian VPS. Open TCP ports **80, 443, 3100**.
 2. **Bootstrap** as root:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/<org>/AIOS-VPS/main/scripts/vps-bootstrap.sh | sudo bash
+   git clone <this-repo> /tmp/aios-vps && cd /tmp/aios-vps
+   sudo bash scripts/vps-bootstrap.sh
    ```
-   Installs Node.js, Caddy (stopped), Claude Code CLI, Codex CLI, creates the `aios` user, drops the systemd unit.
-3. **Sign up** as first admin at `http://<vps-ip>:3100`.
-4. **Attach a domain.** Dashboard walks you through DNS verification, then Caddy provisions HTTPS automatically. See [`onboarding-caddy.md`](./onboarding-caddy.md).
-5. **Authenticate providers.** Connect your Claude subscription (OAuth PKCE) and/or ChatGPT subscription (device auth). See [`onboarding-cli-auth.md`](./onboarding-cli-auth.md).
-6. **Connect GitHub**, pick or create a repo (new repos are scaffolded with `aios.yaml` + a sample department).
-7. **Configure notifications** (Telegram or email).
-8. **Done.** First scheduled task runs within one heartbeat cycle.
+3. **Deploy the app:**
+   ```bash
+   sudo bash scripts/deploy-app.sh
+   sudo systemctl enable --now aios
+   ```
+4. **Sign up** as first admin at `http://<vps-ip>:3100` and walk through the onboarding wizard:
+   - attach a domain (Caddy auto-provisions HTTPS)
+   - authenticate Claude Code and/or Codex (OAuth PKCE / device auth)
+   - connect GitHub, create or attach a repo
+   - configure notifications (Telegram or email)
+5. **Done.** First scheduled task runs within one heartbeat cycle.
 
 Target: fresh VPS to first scheduled run in under 15 minutes, first real task within an hour.
 
-## Repository layout (planned)
+## Repository layout
 
 ```
 /scripts     bootstrap scripts, systemd units
-/server      Node.js dashboard + heartbeat + execution engine
-/ui          React dashboard
+  vps-bootstrap.sh       idempotent VPS bootstrap (root)
+  deploy-app.sh          build + rsync server & ui into /opt/aios
+  backup-restore.sh      tar+restore repo, state, credentials, Caddyfile
+/server      Node.js dashboard + heartbeat + execution engine (TypeScript)
+/ui          React dashboard (TypeScript)
 AIOS-PRD.md               product spec
 onboarding-caddy.md       domain + HTTPS setup recipe
 onboarding-cli-auth.md    Claude Code / Codex auth recipe
-PLAN.md                   implementation tracker
+DEPLOY.md                 end-to-end deploy walkthrough
+PLAN.md                   implementation tracker (all phases done)
 README.md                 this file
 ```
 
 ## Docs
 
 - [`AIOS-PRD.md`](./AIOS-PRD.md) — full product specification
+- [`DEPLOY.md`](./DEPLOY.md) — deploy walkthrough
 - [`onboarding-caddy.md`](./onboarding-caddy.md) — domain attachment + automatic HTTPS
 - [`onboarding-cli-auth.md`](./onboarding-cli-auth.md) — Claude Code + Codex CLI install and auth
-- [`PLAN.md`](./PLAN.md) — current build phase and task tracker
+- [`PLAN.md`](./PLAN.md) — build phase tracker
 
 ## Status
 
-Early build — see [`PLAN.md`](./PLAN.md) for the current phase.
+All nine PLAN phases implemented. See [`PLAN.md`](./PLAN.md) for the phase-by-phase breakdown and [`DEPLOY.md`](./DEPLOY.md) for deploying to a fresh VPS.
 
 ## License
 
