@@ -1,0 +1,19 @@
+# Node
+node_modules/
+*.log
+npm-debug.log*
+
+# Builds
+server/dist/
+ui/dist/
+
+# Local state
+data/
+logs/
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
