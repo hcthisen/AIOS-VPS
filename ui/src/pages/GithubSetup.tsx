@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
+import { Banner } from "../components/Banner";
 
 export function GithubSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
   const [mode, setMode] = useState<"pat" | "deploy_key">("pat");
@@ -28,26 +30,25 @@ export function GithubSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
   };
 
   return (
-    <div className="card col">
-      <h2 style={{ marginTop: 0 }}>Connect GitHub</h2>
+    <Section title="Connect GitHub">
       <div className="row">
-        <label><input type="radio" checked={mode === "pat"} onChange={() => setMode("pat")} /> PAT</label>
-        <label><input type="radio" checked={mode === "deploy_key"} onChange={() => setMode("deploy_key")} /> Deploy key</label>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="radio" checked={mode === "pat"} onChange={() => setMode("pat")} style={{ width: "auto", minHeight: 0 }} /> PAT
+        </label>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="radio" checked={mode === "deploy_key"} onChange={() => setMode("deploy_key")} style={{ width: "auto", minHeight: 0 }} /> Deploy key
+        </label>
       </div>
       {mode === "pat" ? (
-        <>
-          <p className="small muted">
-            Use a personal access token with <code>repo</code> scope to list repos and create a new AIOS repo.
-          </p>
+        <label className="col">
+          <span className="small muted">Personal access token (<code>repo</code> scope)</span>
           <input type="password" placeholder="ghp_..." value={token} onChange={(e) => setToken(e.target.value)} />
-        </>
+        </label>
       ) : (
-        <>
-          <p className="small muted">
-            Paste a private SSH key for an existing repo deploy key. This mode is for attaching an existing repo.
-          </p>
+        <label className="col">
+          <span className="small muted">Private SSH key for an existing repo deploy key</span>
           <textarea value={privateKey} onChange={(e) => setPrivateKey(e.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
-        </>
+        </label>
       )}
       <div className="row">
         <button className="primary" onClick={connect} disabled={busy || (mode === "pat" ? !token : !privateKey)}>
@@ -55,7 +56,7 @@ export function GithubSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
         </button>
         {login && <span className="badge ok">@{login}</span>}
       </div>
-      {error && <div className="badge err">{error}</div>}
-    </div>
+      {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
+    </Section>
   );
 }

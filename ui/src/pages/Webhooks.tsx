@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
+import { IconButton } from "../components/IconButton";
 
 interface WebhookHandler {
   department: string;
@@ -59,7 +61,7 @@ export function WebhooksPage({ navigate }: { navigate: (t: string) => void }) {
   return (
     <div className="col">
       <div>
-        <h2 style={{ marginBottom: 8 }}>Webhook deliveries</h2>
+        <h2>Webhook deliveries</h2>
         <div className="small muted">
           Webhooks let external systems POST JSON into a department-specific markdown handler. The request is matched to
           <code> &lt;department&gt;/webhooks/&lt;name&gt;.md </code>
@@ -68,80 +70,75 @@ export function WebhooksPage({ navigate }: { navigate: (t: string) => void }) {
       </div>
 
       <div className="grid-2">
-        <div className="card col">
-          <h3 style={{ margin: 0 }}>How it works</h3>
-          <div className="small muted">Each delivery follows the same path through the system:</div>
+        <Section title="How it works" description="Each delivery follows the same path through the system.">
           <div className="small">1. AIOS receives a POST to <code>/webhooks/&lt;department&gt;/&lt;name&gt;</code>.</div>
           <div className="small">2. It looks for <code>&lt;department&gt;/webhooks/&lt;name&gt;.md</code> in the repo.</div>
           <div className="small">3. If that file defines a secret, AIOS checks it against <code>x-webhook-key</code>, <code>x-webhook-secret</code>, <code>?key=</code>, or <code>?secret=</code>.</div>
           <div className="small">4. AIOS appends the JSON payload under a <code>Payload</code> section and starts a run for that department. If the department is busy, the run is queued.</div>
-        </div>
+        </Section>
 
-        <div className="card col">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <h3 style={{ margin: 0 }}>Handler file</h3>
+        <Section
+          title="Handler file"
+          description={`Secrets are optional. Keep the logic in the markdown prompt, not in the dashboard.${selectedHandler ? ` The download includes a ready-to-edit handler file for ${selectedHandler.endpoint}.` : " The download uses placeholders you can fill in."}`}
+          actions={
             <button className="primary" onClick={() => downloadExampleMarkdown(selectedHandler, exampleMarkdown)}>
               Download example .md
             </button>
-          </div>
-          <div className="small muted">Secrets are optional. Keep the logic in the markdown prompt, not in the dashboard.</div>
-          <div className="small muted">
-            The download includes a ready-to-edit handler file with instructions, secret guidance, and endpoint examples
-            {selectedHandler ? ` for ${selectedHandler.endpoint}` : " using placeholders"}.
-          </div>
-          <pre style={codeBlockStyle}><code>{exampleMarkdown}</code></pre>
-        </div>
+          }
+        >
+          <pre className="code-block"><code>{exampleMarkdown}</code></pre>
+        </Section>
       </div>
 
-      <div className="card col">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <h3 style={{ margin: 0 }}>Configured handlers</h3>
-          <div className="small muted">{handlers.length} endpoint{handlers.length === 1 ? "" : "s"}</div>
-        </div>
-        {!handlers.length && (
+      <Section
+        title="Configured handlers"
+        actions={<span className="small muted">{handlers.length} endpoint{handlers.length === 1 ? "" : "s"}</span>}
+        className="table-cards"
+      >
+        {!handlers.length ? (
           <div className="small muted">
             No webhook handlers yet. Add markdown files under <code>&lt;department&gt;/webhooks/</code> to create endpoints.
           </div>
-        )}
-        {!!handlers.length && (
-          <table>
-            <thead>
-              <tr>
-                <th>Endpoint</th>
-                <th>File</th>
-                <th>Secret</th>
-                <th>Deliveries</th>
-                <th>Last outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {handlers.map((handler) => (
-                <tr
-                  key={handler.endpoint}
-                  onClick={() => {
-                    setSelectedEndpoint(handler.endpoint);
-                    setSelectedDeliveryId(null);
-                  }}
-                  style={{ cursor: "pointer", background: activeEndpoint === handler.endpoint ? "var(--panel-2)" : undefined }}
-                >
-                  <td>
-                    <div><b>{handler.endpoint}</b></div>
-                    <div className="small muted">{handler.promptPreview}</div>
-                  </td>
-                  <td className="mono small">{handler.relPath}</td>
-                  <td>{handler.hasSecret ? <span className="badge ok">required</span> : <span className="badge">optional</span>}</td>
-                  <td>{handler.deliveries}</td>
-                  <td>{handler.lastOutcome ? <span className={`badge ${outcomeClass(handler.lastOutcome)}`}>{outcomeLabel(handler.lastOutcome)}</span> : <span className="small muted">none yet</span>}</td>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Endpoint</th>
+                  <th>File</th>
+                  <th>Secret</th>
+                  <th>Deliveries</th>
+                  <th>Last outcome</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {handlers.map((handler) => (
+                  <tr
+                    key={handler.endpoint}
+                    onClick={() => {
+                      setSelectedEndpoint(handler.endpoint);
+                      setSelectedDeliveryId(null);
+                    }}
+                    style={{ cursor: "pointer", background: activeEndpoint === handler.endpoint ? "var(--panel-2)" : undefined }}
+                  >
+                    <td data-label="Endpoint">
+                      <div><b>{handler.endpoint}</b></div>
+                      <div className="small muted">{handler.promptPreview}</div>
+                    </td>
+                    <td className="mono small" data-label="File">{handler.relPath}</td>
+                    <td data-label="Secret">{handler.hasSecret ? <span className="badge ok">required</span> : <span className="badge">optional</span>}</td>
+                    <td data-label="Deliveries">{handler.deliveries}</td>
+                    <td data-label="Last outcome">{handler.lastOutcome ? <span className={`badge ${outcomeClass(handler.lastOutcome)}`}>{outcomeLabel(handler.lastOutcome)}</span> : <span className="small muted">none yet</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </div>
+      </Section>
 
       <div className="grid-2">
-        <div className="card col">
-          <h3 style={{ margin: 0 }}>Endpoint details</h3>
+        <Section title="Endpoint details">
           {!selectedHandler && <div className="small muted">Select a configured handler to inspect the live endpoint.</div>}
           {selectedHandler && (
             <>
@@ -151,13 +148,12 @@ export function WebhooksPage({ navigate }: { navigate: (t: string) => void }) {
               <div className="small"><b>Secret:</b> {selectedHandler.hasSecret ? "Required" : "Not required"}</div>
               <div className="small"><b>Latest result:</b> {selectedHandler.lastOutcome ? outcomeDetail(selectedHandler.lastOutcome) : "No deliveries yet."}</div>
               <div className="small"><b>POST URL:</b> <code>{endpointUrl}</code></div>
-              <pre style={codeBlockStyle}><code>{buildCurlExample(selectedHandler, endpointUrl || "")}</code></pre>
+              <pre className="code-block"><code>{buildCurlExample(selectedHandler, endpointUrl || "")}</code></pre>
             </>
           )}
-        </div>
+        </Section>
 
-        <div className="card col">
-          <h3 style={{ margin: 0 }}>Selected delivery</h3>
+        <Section title="Selected delivery">
           {!selectedDelivery && <div className="small muted">Select a delivery row below to inspect the payload and linked run.</div>}
           {selectedDelivery && (
             <>
@@ -172,77 +168,68 @@ export function WebhooksPage({ navigate }: { navigate: (t: string) => void }) {
                 </div>
               )}
               <div className="small muted">Stored payload snapshot</div>
-              <pre style={payloadStyle}>{formatPayload(selectedDelivery.payload)}</pre>
+              <pre className="payload-block">{formatPayload(selectedDelivery.payload)}</pre>
             </>
           )}
-        </div>
+        </Section>
       </div>
 
-      <div className="card col">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <h3 style={{ margin: 0 }}>Recent deliveries</h3>
-          <div className="small muted">Newest first, auto-refresh every 5 seconds</div>
-        </div>
-        {!rows.length && <div className="small muted">No deliveries yet.</div>}
-        {!!rows.length && (
-          <table>
-            <thead>
-              <tr>
-                <th>Received</th>
-                <th>Endpoint</th>
-                <th>Source</th>
-                <th>Outcome</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((delivery) => {
-                const runId = runIdFromOutcome(delivery.outcome);
-                return (
-                  <tr
-                    key={delivery.id}
-                    onClick={() => {
-                      setSelectedDeliveryId(delivery.id);
-                      setSelectedEndpoint(delivery.endpoint);
-                    }}
-                    style={{ cursor: "pointer", background: selectedDeliveryId === delivery.id ? "var(--panel-2)" : undefined }}
-                  >
-                    <td className="mono small">{new Date(delivery.received_at).toLocaleString()}</td>
-                    <td>
-                      <div><b>{delivery.endpoint}</b></div>
-                      <div className="small muted">{delivery.department || endpointDepartment(delivery.endpoint)}</div>
-                    </td>
-                    <td className="small muted">{delivery.source || "-"}</td>
-                    <td><span className={`badge ${outcomeClass(delivery.outcome)}`}>{outcomeLabel(delivery.outcome)}</span></td>
-                    <td>
-                      {runId ? <a onClick={(e) => { e.stopPropagation(); navigate(`/runs/${runId}`); }}>view run</a> : <span className="small muted">-</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <Section
+        title="Recent deliveries"
+        actions={<span className="small muted">Newest first, auto-refresh every 5s</span>}
+        className="table-cards"
+      >
+        {!rows.length ? (
+          <div className="small muted">No deliveries yet.</div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Received</th>
+                  <th>Endpoint</th>
+                  <th>Source</th>
+                  <th>Outcome</th>
+                  <th style={{ textAlign: "right" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((delivery) => {
+                  const runId = runIdFromOutcome(delivery.outcome);
+                  return (
+                    <tr
+                      key={delivery.id}
+                      onClick={() => {
+                        setSelectedDeliveryId(delivery.id);
+                        setSelectedEndpoint(delivery.endpoint);
+                      }}
+                      style={{ cursor: "pointer", background: selectedDeliveryId === delivery.id ? "var(--panel-2)" : undefined }}
+                    >
+                      <td className="mono small" data-label="Received">{new Date(delivery.received_at).toLocaleString()}</td>
+                      <td data-label="Endpoint">
+                        <div><b>{delivery.endpoint}</b></div>
+                        <div className="small muted">{delivery.department || endpointDepartment(delivery.endpoint)}</div>
+                      </td>
+                      <td className="small muted" data-label="Source">{delivery.source || "-"}</td>
+                      <td data-label="Outcome"><span className={`badge ${outcomeClass(delivery.outcome)}`}>{outcomeLabel(delivery.outcome)}</span></td>
+                      <td data-label="Actions" style={{ textAlign: "right" }}>
+                        {runId ? (
+                          <IconButton onClick={() => navigate(`/runs/${runId}`)}>View run</IconButton>
+                        ) : (
+                          <span className="small muted">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
-      </div>
+      </Section>
     </div>
   );
 }
-
-const codeBlockStyle: React.CSSProperties = {
-  margin: 0,
-  padding: "12px",
-  borderRadius: 6,
-  border: "1px solid var(--border)",
-  background: "var(--panel-2)",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-};
-
-const payloadStyle: React.CSSProperties = {
-  ...codeBlockStyle,
-  maxHeight: 320,
-  overflow: "auto",
-};
 
 function endpointDepartment(endpoint: string) {
   return endpoint.split("/")[0] || "unknown";

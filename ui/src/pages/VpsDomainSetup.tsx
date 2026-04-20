@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
+import { Banner } from "../components/Banner";
 
 type Verify = { domain: string; resolved: boolean; resolvedIps: string[]; expectedIp: string; matches: boolean };
 
@@ -51,19 +53,17 @@ export function VpsDomainSetup({ onAdvance }: { onAdvance: () => Promise<void> }
   };
 
   return (
-    <div className="card col">
-      <h2 style={{ marginTop: 0 }}>Attach a domain (HTTPS via Caddy)</h2>
-      <p className="muted small">
-        Point an A record at <b className="mono">{net?.ip || "…"}</b>, then configure the domain.
-        Until you do, the dashboard is reachable on <code>{`http://${net?.ip}:${net?.port}`}</code>.
-      </p>
+    <Section
+      title="Attach a domain (HTTPS via Caddy)"
+      description={<>Point an A record at <b className="mono">{net?.ip || "\u2026"}</b>, then configure the domain. Until you do, the dashboard is reachable on <code>{`http://${net?.ip}:${net?.port}`}</code>.</>}
+    >
       <div className="row">
         <input placeholder="dashboard.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} />
         <button onClick={doVerify} disabled={!domain}>Verify DNS</button>
       </div>
       {verify && (
         <div className="small">
-          Resolved: <code>{verify.resolvedIps.join(", ") || "(none)"}</code> · Expected: <code>{verify.expectedIp}</code> ·{" "}
+          Resolved: <code>{verify.resolvedIps.join(", ") || "(none)"}</code> \u00b7 Expected: <code>{verify.expectedIp}</code> \u00b7{" "}
           {verify.matches
             ? <span className="badge ok">matches</span>
             : <span className="badge warn">does not match</span>}
@@ -71,12 +71,12 @@ export function VpsDomainSetup({ onAdvance }: { onAdvance: () => Promise<void> }
       )}
       <div className="row">
         <button className="primary" onClick={doConfigure} disabled={!domain || configuring}>
-          {configuring ? "Configuring…" : "Configure HTTPS"}
+          {configuring ? "Configuring\u2026" : "Configure HTTPS"}
         </button>
         <a className="small muted" onClick={doSkip}>skip (stay on raw IP)</a>
       </div>
-      {ready && !ready.ready && <div className="small muted">Waiting for HTTPS to come up at {ready.url}…</div>}
-      {error && <div className="badge err">{error}</div>}
-    </div>
+      {ready && !ready.ready && <div className="small muted">Waiting for HTTPS to come up at {ready.url}\u2026</div>}
+      {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
+    </Section>
   );
 }

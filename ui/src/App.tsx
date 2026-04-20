@@ -67,28 +67,58 @@ export function App() {
     return <SetupLayout me={me} onAdvance={refresh} navigate={navigate} path={path} />;
   }
 
+  const close = () => document.body.classList.remove("nav-open");
+  const go = (t: string) => { close(); navigate(t); };
+  const title = titleFor(path);
+
   return (
     <div className="layout">
+      <header className="topbar">
+        <button
+          className="hamburger"
+          aria-label="Open navigation"
+          onClick={() => document.body.classList.toggle("nav-open")}
+        >
+          {"\u2630"}
+        </button>
+        <span className="brand">AIOS</span>
+        <span className="spacer" />
+        <span className="small muted">{title}</span>
+      </header>
+      <div className="drawer-scrim" onClick={close} />
       <nav className="sidebar">
         <h1>AIOS</h1>
-        <a className={path === "/" ? "active" : ""} onClick={() => navigate("/")}>Overview</a>
-        <a className={path.startsWith("/runs") ? "active" : ""} onClick={() => navigate("/runs")}>Runs</a>
-        <a className={path.startsWith("/departments") ? "active" : ""} onClick={() => navigate("/departments")}>Departments</a>
-        <a className={path === "/manual" ? "active" : ""} onClick={() => navigate("/manual")}>Manual run</a>
-        <a className={path === "/backlog" ? "active" : ""} onClick={() => navigate("/backlog")}>Backlog</a>
-        <a className={path === "/webhooks" ? "active" : ""} onClick={() => navigate("/webhooks")}>Webhooks</a>
-        <a className={path === "/usage" ? "active" : ""} onClick={() => navigate("/usage")}>Usage</a>
-        <a className={path === "/terminal" ? "active" : ""} onClick={() => navigate("/terminal")}>Terminal</a>
-        <a className={path === "/settings" ? "active" : ""} onClick={() => navigate("/settings")}>Settings</a>
-        <hr style={{ borderColor: "var(--border)", margin: "16px 0" }} />
+        <a className={path === "/" ? "active" : ""} onClick={() => go("/")}>Overview</a>
+        <a className={path.startsWith("/runs") ? "active" : ""} onClick={() => go("/runs")}>Runs</a>
+        <a className={path.startsWith("/departments") ? "active" : ""} onClick={() => go("/departments")}>Departments</a>
+        <a className={path === "/manual" ? "active" : ""} onClick={() => go("/manual")}>Manual run</a>
+        <a className={path === "/backlog" ? "active" : ""} onClick={() => go("/backlog")}>Backlog</a>
+        <a className={path === "/webhooks" ? "active" : ""} onClick={() => go("/webhooks")}>Webhooks</a>
+        <a className={path === "/usage" ? "active" : ""} onClick={() => go("/usage")}>Usage</a>
+        <a className={path === "/terminal" ? "active" : ""} onClick={() => go("/terminal")}>Terminal</a>
+        <a className={path === "/settings" ? "active" : ""} onClick={() => go("/settings")}>Settings</a>
+        <hr />
         <div className="small muted">{me.user.email}</div>
-        <a onClick={async () => { await api("/api/auth/logout", { method: "POST" }); refresh(); navigate("/auth"); }}>Log out</a>
+        <a onClick={async () => { close(); await api("/api/auth/logout", { method: "POST" }); refresh(); navigate("/auth"); }}>Log out</a>
       </nav>
       <main className="main">
         <Page path={path} navigate={navigate} me={me} refresh={refresh} />
       </main>
     </div>
   );
+}
+
+function titleFor(path: string): string {
+  if (path === "/") return "Overview";
+  if (path.startsWith("/runs")) return "Runs";
+  if (path.startsWith("/departments")) return "Departments";
+  if (path === "/manual") return "Manual run";
+  if (path === "/backlog") return "Backlog";
+  if (path === "/webhooks") return "Webhooks";
+  if (path === "/usage") return "Usage";
+  if (path === "/terminal") return "Terminal";
+  if (path === "/settings") return "Settings";
+  return "";
 }
 
 function setupPhaseToRoute(phase: string) {

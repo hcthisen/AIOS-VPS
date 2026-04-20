@@ -1,89 +1,125 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { ScheduleField } from "../components/ScheduleField";
+import { Section } from "../components/Section";
+import { Tabs } from "../components/Tabs";
+import { Drawer } from "../components/Drawer";
+import { Banner } from "../components/Banner";
+import { IconButton } from "../components/IconButton";
+import { FeedbackButton, useActionRunner } from "../components/FeedbackButton";
+import { DirtyDot } from "../components/DirtyDot";
+import { SavedAt } from "../components/SavedAt";
 import { describeCronSchedule } from "../lib/cron";
 
-type ActionState = "idle" | "working" | "ok" | "error";
+interface CronTask {
+  name: string;
+  relPath: string;
+  path: string;
+  schedule: string;
+  provider?: string;
+  paused?: boolean;
+}
+
+interface Goal {
+  name: string;
+  relPath: string;
+  path: string;
+  status: string;
+  provider?: string;
+}
+
+interface Run {
+  id: string;
+  started_at: string;
+  trigger: string;
+  status: string;
+}
+
+interface BacklogEntry {
+  id: string;
+  trigger: string;
+  queued_at: string;
+}
+
+interface Claim {
+  owner?: string;
+  acquired_at?: string;
+  stale?: boolean;
+}
+
+interface Department {
+  name: string;
+  path: string;
+  claim: Claim | null;
+  cron: CronTask[];
+  goals: Goal[];
+  runs: Run[];
+  backlog: BacklogEntry[];
+}
+
+type TabId = "tasks" | "goals" | "env" | "runs" | "backlog";
+
+type EditorMode = "create" | "edit";
+
+interface CronEditorState {
+  mode: EditorMode;
+  relPath: string | null;
+  name: string;
+  schedule: string;
+  provider: string;
+  prompt: string;
+}
+
+interface GoalEditorState {
+  mode: EditorMode;
+  relPath: string | null;
+  name: string;
+  status: string;
+  provider: string;
+  prompt: string;
+}
 
 export function DepartmentDetail({ name, navigate }: { name: string; navigate: (t: string) => void }) {
-  const [d, setD] = useState<any>(null);
-  const [envText, setEnvText] = useState("");
-  const [selectedCron, setSelectedCron] = useState<string>("");
-  const [cronText, setCronText] = useState("");
-  const [selectedGoal, setSelectedGoal] = useState<string>("");
-  const [goalText, setGoalText] = useState("");
-  const [newCron, setNewCron] = useState({ name: "", schedule: "0 * * * *", provider: "", prompt: "" });
-  const [newGoal, setNewGoal] = useState({ name: "", status: "active", provider: "", prompt: "" });
+  const [d, setD] = useState<Department | null>(null);
+  const [tab, setTab] = useState<TabId>("tasks");
   const [notice, setNotice] = useState<string | null>(null);
-  const [actions, setActions] = useState<Record<string, ActionState>>({});
 
-  const refresh = () => api(`/api/departments/${encodeURIComponent(name)}`).then(setD);
+  const [envText, setEnvText] = useState("");
+  const [envInitial, setEnvInitial] = useState("");
+  const [envSavedAt, setEnvSavedAt] = useState<number | null>(null);
+  const [envReveal, setEnvReveal] = useState(false);
+  const [envRaw, setEnvRaw] = useState(false);
+
+  const [cronEditor, setCronEditor] = useState<CronEditorState | null>(null);
+  const [goalEditor, setGoalEditor] = useState<GoalEditorState | null>(null);
+
+  const { actions, run: runAction } = useActionRunner();
+
+  const envDirty = envText !== envInitial;
+  const dirty = envDirty || cronEditor != null || goalEditor != null;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+
+  const refresh = async () => {
+    const next = await api<Department>(`/api/departments/${encodeURIComponent(name)}`);
+    setD(next);
+  };
 
   useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, 5000);
+    refresh().catch((e) => setNotice(e?.message || String(e)));
+    const timer = setInterval(() => {
+      if (dirtyRef.current) return;
+      refresh().catch(() => {});
+    }, 5000);
     return () => clearInterval(timer);
   }, [name]);
 
   useEffect(() => {
-    loadFile(`${name}/.env`, setEnvText, true);
+    loadFile(`${name}/.env`, (text) => {
+      setEnvText(text);
+      setEnvInitial(text);
+    }, true);
   }, [name]);
-
-  useEffect(() => {
-    if (!d?.cron?.length) {
-      setSelectedCron("");
-      setCronText("");
-      return;
-    }
-    const exists = d.cron.some((task: any) => task.relPath === selectedCron);
-    setSelectedCron(exists ? selectedCron : d.cron[0].relPath);
-  }, [d?.cron?.length, selectedCron]);
-
-  useEffect(() => {
-    if (!selectedCron) return;
-    loadFile(selectedCron, setCronText);
-  }, [selectedCron]);
-
-  useEffect(() => {
-    if (!d?.goals?.length) {
-      setSelectedGoal("");
-      setGoalText("");
-      return;
-    }
-    const exists = d.goals.some((goal: any) => goal.relPath === selectedGoal);
-    setSelectedGoal(exists ? selectedGoal : d.goals[0].relPath);
-  }, [d?.goals?.length, selectedGoal]);
-
-  useEffect(() => {
-    if (!selectedGoal) return;
-    loadFile(selectedGoal, setGoalText);
-  }, [selectedGoal]);
-
-  const selectedCronTask = useMemo(
-    () => d?.cron?.find((task: any) => task.relPath === selectedCron) || null,
-    [d?.cron, selectedCron],
-  );
-  const selectedCronSchedule = readScheduleFromMarkdown(cronText) || selectedCronTask?.schedule || "0 * * * *";
-
-  const setActionState = (key: string, state: ActionState) => {
-    setActions((current) => ({ ...current, [key]: state }));
-  };
-
-  const runAction = async (key: string, work: () => Promise<void>) => {
-    setNotice(null);
-    setActionState(key, "working");
-    try {
-      await work();
-      setActionState(key, "ok");
-      window.setTimeout(() => setActionState(key, "idle"), 1400);
-      return true;
-    } catch (e: any) {
-      setNotice(e.message || String(e));
-      setActionState(key, "error");
-      window.setTimeout(() => setActionState(key, "idle"), 1800);
-      return false;
-    }
-  };
 
   const saveTextFile = async (relPath: string, text: string) => {
     await api(fileUrl(relPath), {
@@ -91,224 +127,494 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       headers: { "Content-Type": "text/plain" },
       body: text,
     });
-    await refresh();
   };
 
-  const togglePause = async (relPath: string, paused: boolean) => {
-    setNotice(null);
-    try {
-      await api(`/api/cron/${encodeURIComponent(relPath)}/${paused ? "resume" : "pause"}`, { method: "POST" });
+  const togglePause = (task: CronTask) =>
+    runAction(
+      `cron-${task.relPath}-pause`,
+      async () => {
+        await api(`/api/cron/${encodeURIComponent(task.relPath)}/${task.paused ? "resume" : "pause"}`, { method: "POST" });
+        await refresh();
+      },
+      setNotice,
+    );
+
+  const openCreateCron = () => setCronEditor({
+    mode: "create", relPath: null, name: "", schedule: "0 * * * *", provider: "", prompt: "",
+  });
+  const openEditCron = async (task: CronTask) => {
+    const text = await api<string>(fileUrl(task.relPath)).catch(() => "");
+    const prompt = stripFrontmatter(text);
+    setCronEditor({
+      mode: "edit",
+      relPath: task.relPath,
+      name: task.name,
+      schedule: task.schedule || "0 * * * *",
+      provider: task.provider || "",
+      prompt,
+    });
+  };
+  const saveCron = () =>
+    runAction("cron-save", async () => {
+      if (!cronEditor) return;
+      const prompt = cronEditor.prompt.trim();
+      if (!prompt) throw new Error("prompt is required");
+      const providerLine = cronEditor.provider ? `provider: ${cronEditor.provider}\n` : "";
+      const body = `---\nschedule: "${cronEditor.schedule}"\n${providerLine}---\n\n${prompt}\n`;
+      const relPath = cronEditor.mode === "create"
+        ? buildRelPath(name, "cron", cronEditor.name)
+        : cronEditor.relPath!;
+      if (cronEditor.mode === "create" && !cronEditor.name.trim()) throw new Error("task name is required");
+      await saveTextFile(relPath, body);
       await refresh();
-    } catch (e: any) {
-      setNotice(e.message || String(e));
-    }
-  };
+      setCronEditor(null);
+    }, setNotice);
 
-  const createCron = async () => {
-    await runAction("cron-create", async () => {
-      const fileName = newCron.name.trim().replace(/[^\w.-]+/g, "-");
-      if (!fileName || !newCron.prompt.trim()) throw new Error("task name and prompt are required");
-      const relPath = `${name}/cron/${fileName}.md`;
-      const providerLine = newCron.provider ? `provider: ${newCron.provider}\n` : "";
-      const body = `---\nschedule: "${newCron.schedule}"\n${providerLine}---\n\n${newCron.prompt.trim()}\n`;
-      await saveTextFile(relPath, body);
-      setSelectedCron(relPath);
-      setNewCron({ name: "", schedule: "0 * * * *", provider: "", prompt: "" });
+  const openCreateGoal = () => setGoalEditor({
+    mode: "create", relPath: null, name: "", status: "active", provider: "", prompt: "",
+  });
+  const openEditGoal = async (goal: Goal) => {
+    const text = await api<string>(fileUrl(goal.relPath)).catch(() => "");
+    const prompt = stripFrontmatter(text);
+    setGoalEditor({
+      mode: "edit",
+      relPath: goal.relPath,
+      name: goal.name,
+      status: goal.status,
+      provider: goal.provider || "",
+      prompt,
     });
   };
-
-  const createGoal = async () => {
-    await runAction("goal-create", async () => {
-      const fileName = newGoal.name.trim().replace(/[^\w.-]+/g, "-");
-      if (!fileName || !newGoal.prompt.trim()) throw new Error("goal name and prompt are required");
-      const relPath = `${name}/goals/${fileName}.md`;
-      const providerLine = newGoal.provider ? `provider: ${newGoal.provider}\n` : "";
-      const body = `---\nstatus: ${newGoal.status}\n${providerLine}state: {}\n---\n\n${newGoal.prompt.trim()}\n`;
+  const saveGoal = () =>
+    runAction("goal-save", async () => {
+      if (!goalEditor) return;
+      const prompt = goalEditor.prompt.trim();
+      if (!prompt) throw new Error("prompt is required");
+      const providerLine = goalEditor.provider ? `provider: ${goalEditor.provider}\n` : "";
+      const body = `---\nstatus: ${goalEditor.status}\n${providerLine}state: {}\n---\n\n${prompt}\n`;
+      const relPath = goalEditor.mode === "create"
+        ? buildRelPath(name, "goals", goalEditor.name)
+        : goalEditor.relPath!;
+      if (goalEditor.mode === "create" && !goalEditor.name.trim()) throw new Error("goal name is required");
       await saveTextFile(relPath, body);
-      setSelectedGoal(relPath);
-      setNewGoal({ name: "", status: "active", provider: "", prompt: "" });
-    });
-  };
+      await refresh();
+      setGoalEditor(null);
+    }, setNotice);
+
+  const saveEnv = () =>
+    runAction("env-save", async () => {
+      await saveTextFile(`${name}/.env`, envText);
+      setEnvInitial(envText);
+      setEnvSavedAt(Date.now());
+    }, setNotice);
+
+  const claimBadge = useMemo(() => {
+    const claim = d?.claim;
+    if (!claim) return <span className="badge ok">free</span>;
+    if (claim.stale) return <span className="badge warn">stale claim</span>;
+    return <span className="badge warn">claimed{claim.owner ? ` by ${claim.owner}` : ""}</span>;
+  }, [d?.claim]);
 
   if (!d) return <div className="muted">Loading...</div>;
 
+  const tabs = [
+    { id: "tasks", label: `Tasks${d.cron?.length ? ` (${d.cron.length})` : ""}` },
+    { id: "goals", label: `Goals${d.goals?.length ? ` (${d.goals.length})` : ""}` },
+    { id: "env", label: "Environment" },
+    { id: "runs", label: "Runs" },
+    { id: "backlog", label: `Backlog${d.backlog?.length ? ` (${d.backlog.length})` : ""}` },
+  ];
+
   return (
     <div className="col">
-      <a onClick={() => navigate("/departments")} className="small">{"<-"} departments</a>
-      <h2>{d.name}</h2>
-      <div className="small muted">{d.path}</div>
-      {notice && <div className="badge err">{notice}</div>}
+      <a onClick={() => navigate("/departments")} className="small">{"\u2190"} Departments</a>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Cron tasks</h3>
-        {!d.cron?.length && <div className="muted small">No cron files.</div>}
-        {!!d.cron?.length && (
-          <table>
-            <tbody>
-              {d.cron.map((task: any) => (
-                <tr key={task.path}>
-                  <td><b>{task.name}</b></td>
-                  <td>
-                    <div>{describeCronSchedule(task.schedule)}</div>
-                    <div className="mono small muted">{task.schedule}</div>
-                  </td>
-                  <td>{task.provider || "-"}</td>
-                  <td>{task.paused ? <span className="badge warn">paused</span> : <span className="badge ok">active</span>}</td>
-                  <td><a onClick={() => setSelectedCron(task.relPath)}>edit</a></td>
-                  <td><a onClick={() => togglePause(task.relPath, !!task.paused)}>{task.paused ? "resume" : "pause"}</a></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+      <div className="page-header">
+        <div>
+          <h2>{d.name} {claimBadge}</h2>
+          <div className="path mono">{d.path}</div>
+        </div>
+        <div className="page-header-actions">
+          <button className="ghost" onClick={() => navigate("/manual")}>Run now</button>
+        </div>
+      </div>
 
-        <div className="col" style={{ marginTop: 12 }}>
-          <div className="row">
-            <select value={selectedCron} onChange={(e) => setSelectedCron(e.target.value)}>
-              <option value="">-- pick a cron file --</option>
-              {d.cron?.map((task: any) => <option key={task.relPath} value={task.relPath}>{task.relPath}</option>)}
-            </select>
-            <FeedbackButton
-              state={actions["cron-save"] || "idle"}
-              idleLabel="Save cron"
-              workingLabel="Saving..."
-              okLabel="Saved"
-              onClick={() => selectedCron && runAction("cron-save", async () => { await saveTextFile(selectedCron, cronText); })}
-              disabled={!selectedCron}
-            />
-          </div>
-          {!!selectedCron && (
-            <ScheduleField
-              label="Schedule"
-              value={selectedCronSchedule}
-              onChange={(next) => setCronText((current) => upsertScheduleInMarkdown(current, next))}
-            />
+      {notice && <Banner kind="err" onDismiss={() => setNotice(null)}>{notice}</Banner>}
+
+      <Tabs tabs={tabs} active={tab} onChange={(id) => setTab(id as TabId)} />
+
+      {tab === "tasks" && (
+        <Section
+          title="Scheduled tasks"
+          description="Cron files under this department's cron/ folder."
+          actions={<button className="primary" onClick={openCreateCron}>Add task</button>}
+        >
+          {!d.cron?.length ? (
+            <div className="muted small">No scheduled tasks yet.</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Schedule</th>
+                    <th>Provider</th>
+                    <th>Status</th>
+                    <th style={{ textAlign: "right" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.cron.map((task) => (
+                    <tr key={task.path}>
+                      <td><b>{task.name}</b></td>
+                      <td title={task.schedule}>{describeCronSchedule(task.schedule)}</td>
+                      <td>{task.provider || "-"}</td>
+                      <td>
+                        {task.paused
+                          ? <span className="badge warn">paused</span>
+                          : <span className="badge ok">active</span>}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <div className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
+                          <IconButton onClick={() => openEditCron(task)}>Edit</IconButton>
+                          <IconButton onClick={() => togglePause(task)}>
+                            {task.paused ? "Resume" : "Pause"}
+                          </IconButton>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-          <textarea value={cronText} onChange={(e) => setCronText(e.target.value)} placeholder="Cron markdown" />
-        </div>
+        </Section>
+      )}
 
-        <div className="col" style={{ marginTop: 12 }}>
-          <h4 style={{ margin: 0 }}>Create scheduled task</h4>
-          <input value={newCron.name} onChange={(e) => setNewCron({ ...newCron, name: e.target.value })} placeholder="task name" />
-          <ScheduleField value={newCron.schedule} onChange={(schedule) => setNewCron({ ...newCron, schedule })} />
-          <select value={newCron.provider} onChange={(e) => setNewCron({ ...newCron, provider: e.target.value })}>
-            <option value="">default provider</option>
-            <option value="claude-code">Claude Code</option>
-            <option value="codex">Codex</option>
-          </select>
-          <textarea value={newCron.prompt} onChange={(e) => setNewCron({ ...newCron, prompt: e.target.value })} placeholder="Prompt" />
-          <FeedbackButton
-            className="primary"
-            state={actions["cron-create"] || "idle"}
-            idleLabel="Add scheduled task"
-            workingLabel="Adding..."
-            okLabel="Added"
-            onClick={createCron}
-          />
-        </div>
-      </div>
+      {tab === "goals" && (
+        <Section
+          title="Goals"
+          description="Long-running goals under this department's goals/ folder."
+          actions={<button className="primary" onClick={openCreateGoal}>Add goal</button>}
+        >
+          {!d.goals?.length ? (
+            <div className="muted small">No goals yet.</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>Provider</th>
+                    <th style={{ textAlign: "right" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.goals.map((goal) => (
+                    <tr key={goal.path}>
+                      <td><b>{goal.name}</b></td>
+                      <td>{goal.status}</td>
+                      <td>{goal.provider || "-"}</td>
+                      <td style={{ textAlign: "right" }}>
+                        <IconButton onClick={() => openEditGoal(goal)}>Edit</IconButton>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+      )}
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Goals</h3>
-        {!d.goals?.length && <div className="muted small">No goals.</div>}
-        {!!d.goals?.length && (
-          <table>
-            <tbody>
-              {d.goals.map((goal: any) => (
-                <tr key={goal.path}>
-                  <td><b>{goal.name}</b></td>
-                  <td>{goal.status}</td>
-                  <td>{goal.provider || "-"}</td>
-                  <td><a onClick={() => setSelectedGoal(goal.relPath)}>edit</a></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+      {tab === "env" && (
+        <Section
+          title={<span>Environment <DirtyDot dirty={envDirty} /></span>}
+          description="One KEY=value per line. Secrets are masked by default."
+          actions={
+            <>
+              <SavedAt at={envSavedAt} />
+              <button className="ghost" onClick={() => setEnvRaw((v) => !v)}>
+                {envRaw ? "Structured" : "Edit raw"}
+              </button>
+              {!envRaw && (
+                <button className="ghost" onClick={() => setEnvReveal((v) => !v)}>
+                  {envReveal ? "Hide values" : "Reveal values"}
+                </button>
+              )}
+              <FeedbackButton
+                className="primary"
+                state={actions["env-save"] || "idle"}
+                idleLabel="Save"
+                workingLabel="Saving..."
+                okLabel="Saved"
+                onClick={saveEnv}
+                disabled={!envDirty}
+              />
+            </>
+          }
+        >
+          {envRaw ? (
+            <textarea
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+              placeholder="KEY=value"
+              spellCheck={false}
+              className="mono"
+            />
+          ) : (
+            <EnvStructuredEditor value={envText} onChange={setEnvText} reveal={envReveal} />
+          )}
+        </Section>
+      )}
 
-        <div className="col" style={{ marginTop: 12 }}>
-          <div className="row">
-            <select value={selectedGoal} onChange={(e) => setSelectedGoal(e.target.value)}>
-              <option value="">-- pick a goal file --</option>
-              {d.goals?.map((goal: any) => <option key={goal.relPath} value={goal.relPath}>{goal.relPath}</option>)}
-            </select>
+      {tab === "runs" && (
+        <Section
+          title="Recent runs"
+          actions={<a className="small" onClick={() => navigate("/runs")}>View all runs</a>}
+        >
+          {!d.runs?.length ? (
+            <div className="muted small">No runs yet.</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Started</th>
+                    <th>Trigger</th>
+                    <th>Status</th>
+                    <th style={{ textAlign: "right" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.runs.map((r) => (
+                    <tr key={r.id}>
+                      <td className="mono small">{new Date(r.started_at).toLocaleString()}</td>
+                      <td>{r.trigger}</td>
+                      <td>
+                        <span className={`badge ${r.status === "succeeded" ? "ok" : r.status === "running" ? "" : "err"}`}>
+                          {r.status}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <IconButton onClick={() => navigate(`/runs/${r.id}`)}>View</IconButton>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+      )}
+
+      {tab === "backlog" && (
+        <Section title="Backlog" description="Runs waiting for a free claim.">
+          {!d.backlog?.length ? (
+            <div className="muted small">Empty.</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Queued</th>
+                    <th>Trigger</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.backlog.map((b) => (
+                    <tr key={b.id}>
+                      <td className="mono small">{new Date(b.queued_at).toLocaleString()}</td>
+                      <td>{b.trigger}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+      )}
+
+      <Drawer
+        open={cronEditor != null}
+        title={cronEditor?.mode === "create" ? "Add scheduled task" : "Edit scheduled task"}
+        onClose={() => setCronEditor(null)}
+        footer={cronEditor && (
+          <>
+            <button className="ghost" onClick={() => setCronEditor(null)}>Cancel</button>
             <FeedbackButton
-              state={actions["goal-save"] || "idle"}
-              idleLabel="Save goal"
+              className="primary"
+              state={actions["cron-save"] || "idle"}
+              idleLabel="Save"
               workingLabel="Saving..."
               okLabel="Saved"
-              onClick={() => selectedGoal && runAction("goal-save", async () => { await saveTextFile(selectedGoal, goalText); })}
-              disabled={!selectedGoal}
+              onClick={saveCron}
+            />
+          </>
+        )}
+      >
+        {cronEditor && (
+          <>
+            <label className="col">
+              <span className="small muted">Name</span>
+              <input
+                value={cronEditor.name}
+                disabled={cronEditor.mode === "edit"}
+                onChange={(e) => setCronEditor({ ...cronEditor, name: e.target.value })}
+                placeholder="daily-summary"
+              />
+            </label>
+            <ScheduleField
+              value={cronEditor.schedule}
+              onChange={(schedule) => setCronEditor({ ...cronEditor, schedule })}
+            />
+            <label className="col">
+              <span className="small muted">Provider</span>
+              <select
+                value={cronEditor.provider}
+                onChange={(e) => setCronEditor({ ...cronEditor, provider: e.target.value })}
+              >
+                <option value="">Default provider</option>
+                <option value="claude-code">Claude Code</option>
+                <option value="codex">Codex</option>
+              </select>
+            </label>
+            <label className="col">
+              <span className="small muted">Prompt</span>
+              <textarea
+                value={cronEditor.prompt}
+                onChange={(e) => setCronEditor({ ...cronEditor, prompt: e.target.value })}
+                placeholder="What should this task do?"
+              />
+            </label>
+          </>
+        )}
+      </Drawer>
+
+      <Drawer
+        open={goalEditor != null}
+        title={goalEditor?.mode === "create" ? "Add goal" : "Edit goal"}
+        onClose={() => setGoalEditor(null)}
+        footer={goalEditor && (
+          <>
+            <button className="ghost" onClick={() => setGoalEditor(null)}>Cancel</button>
+            <FeedbackButton
+              className="primary"
+              state={actions["goal-save"] || "idle"}
+              idleLabel="Save"
+              workingLabel="Saving..."
+              okLabel="Saved"
+              onClick={saveGoal}
+            />
+          </>
+        )}
+      >
+        {goalEditor && (
+          <>
+            <label className="col">
+              <span className="small muted">Name</span>
+              <input
+                value={goalEditor.name}
+                disabled={goalEditor.mode === "edit"}
+                onChange={(e) => setGoalEditor({ ...goalEditor, name: e.target.value })}
+                placeholder="ship-v2"
+              />
+            </label>
+            <label className="col">
+              <span className="small muted">Status</span>
+              <select
+                value={goalEditor.status}
+                onChange={(e) => setGoalEditor({ ...goalEditor, status: e.target.value })}
+              >
+                <option value="active">active</option>
+                <option value="paused">paused</option>
+                <option value="complete">complete</option>
+              </select>
+            </label>
+            <label className="col">
+              <span className="small muted">Provider</span>
+              <select
+                value={goalEditor.provider}
+                onChange={(e) => setGoalEditor({ ...goalEditor, provider: e.target.value })}
+              >
+                <option value="">Default provider</option>
+                <option value="claude-code">Claude Code</option>
+                <option value="codex">Codex</option>
+              </select>
+            </label>
+            <label className="col">
+              <span className="small muted">Prompt</span>
+              <textarea
+                value={goalEditor.prompt}
+                onChange={(e) => setGoalEditor({ ...goalEditor, prompt: e.target.value })}
+                placeholder="What outcome should this goal achieve?"
+              />
+            </label>
+          </>
+        )}
+      </Drawer>
+    </div>
+  );
+}
+
+function EnvStructuredEditor({
+  value,
+  onChange,
+  reveal,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  reveal: boolean;
+}) {
+  const lines = value.split(/\r?\n/);
+  const updateLine = (index: number, nextLine: string) => {
+    const copy = lines.slice();
+    copy[index] = nextLine;
+    onChange(copy.join("\n"));
+  };
+  const addLine = () => onChange(value.endsWith("\n") || value === "" ? value + "KEY=" : value + "\nKEY=");
+
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      {lines.map((line, i) => {
+        const eq = line.indexOf("=");
+        const isPair = eq > 0 && !line.trim().startsWith("#");
+        if (!isPair) {
+          return (
+            <input
+              key={i}
+              value={line}
+              onChange={(e) => updateLine(i, e.target.value)}
+              placeholder="# comment or KEY=value"
+              className="mono small"
+            />
+          );
+        }
+        const key = line.slice(0, eq);
+        const val = line.slice(eq + 1);
+        return (
+          <div key={i} className="row nowrap" style={{ gap: 8 }}>
+            <input
+              value={key}
+              onChange={(e) => updateLine(i, `${e.target.value}=${val}`)}
+              placeholder="KEY"
+              className="mono"
+              style={{ maxWidth: 220 }}
+            />
+            <input
+              type={reveal ? "text" : "password"}
+              value={val}
+              onChange={(e) => updateLine(i, `${key}=${e.target.value}`)}
+              placeholder="value"
+              className="mono"
+              autoComplete="off"
             />
           </div>
-          <textarea value={goalText} onChange={(e) => setGoalText(e.target.value)} placeholder="Goal markdown" />
-        </div>
-
-        <div className="col" style={{ marginTop: 12 }}>
-          <h4 style={{ margin: 0 }}>Create goal</h4>
-          <input value={newGoal.name} onChange={(e) => setNewGoal({ ...newGoal, name: e.target.value })} placeholder="goal name" />
-          <select value={newGoal.status} onChange={(e) => setNewGoal({ ...newGoal, status: e.target.value })}>
-            <option value="active">active</option>
-            <option value="paused">paused</option>
-            <option value="complete">complete</option>
-          </select>
-          <select value={newGoal.provider} onChange={(e) => setNewGoal({ ...newGoal, provider: e.target.value })}>
-            <option value="">default provider</option>
-            <option value="claude-code">Claude Code</option>
-            <option value="codex">Codex</option>
-          </select>
-          <textarea value={newGoal.prompt} onChange={(e) => setNewGoal({ ...newGoal, prompt: e.target.value })} placeholder="Goal prompt" />
-          <FeedbackButton
-            className="primary"
-            state={actions["goal-create"] || "idle"}
-            idleLabel="Add goal"
-            workingLabel="Adding..."
-            okLabel="Added"
-            onClick={createGoal}
-          />
-        </div>
-      </div>
-
-      <div className="card col">
-        <h3 style={{ marginTop: 0 }}>Environment</h3>
-        <textarea value={envText} onChange={(e) => setEnvText(e.target.value)} placeholder="KEY=value" />
-        <div className="row">
-          <FeedbackButton
-            className="primary"
-            state={actions["env-save"] || "idle"}
-            idleLabel="Save .env"
-            workingLabel="Saving..."
-            okLabel="Saved"
-            onClick={() => runAction("env-save", async () => { await saveTextFile(`${name}/.env`, envText); })}
-          />
-        </div>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Recent runs</h3>
-        {!d.runs?.length && <div className="muted small">No runs yet.</div>}
-        {!!d.runs?.length && (
-          <table>
-            <tbody>
-              {d.runs.map((run: any) => (
-                <tr key={run.id}>
-                  <td className="mono small">{new Date(run.started_at).toLocaleString()}</td>
-                  <td>{run.trigger}</td>
-                  <td><span className={`badge ${run.status === "succeeded" ? "ok" : run.status === "running" ? "" : "err"}`}>{run.status}</span></td>
-                  <td><a onClick={() => navigate(`/runs/${run.id}`)}>view</a></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Backlog</h3>
-        {!d.backlog?.length && <div className="muted small">Empty.</div>}
-        {d.backlog?.map((entry: any) => (
-          <div key={entry.id} className="small">{entry.trigger} - queued {new Date(entry.queued_at).toLocaleString()}</div>
-        ))}
+        );
+      })}
+      <div>
+        <button className="ghost" onClick={addLine}>+ Add line</button>
       </div>
     </div>
   );
@@ -326,57 +632,12 @@ function fileUrl(relPath: string) {
   return `/api/files/${relPath.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function readScheduleFromMarkdown(text: string): string | null {
-  const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!frontmatter) return null;
-  const match = frontmatter[1].match(/^(schedule|cron):\s*"?([^"\r\n]+)"?\s*$/m);
-  return match?.[2]?.trim() || null;
+function stripFrontmatter(text: string): string {
+  const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return m ? text.slice(m[0].length).replace(/^\r?\n/, "").trimEnd() : text.trimEnd();
 }
 
-function upsertScheduleInMarkdown(text: string, schedule: string) {
-  const nextSchedule = schedule.trim() || "0 * * * *";
-  const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n?[\s\S]*)$/);
-  if (!frontmatter) {
-    const body = text.trim();
-    return `---\nschedule: "${nextSchedule}"\n---\n\n${body}${body ? "\n" : ""}`;
-  }
-
-  let meta = frontmatter[1];
-  const body = frontmatter[2].replace(/^\r?\n/, "\n");
-  if (/^schedule:/m.test(meta)) {
-    meta = meta.replace(/^schedule:\s*.*$/m, `schedule: "${nextSchedule}"`);
-  } else if (/^cron:/m.test(meta)) {
-    meta = meta.replace(/^cron:\s*.*$/m, `schedule: "${nextSchedule}"`);
-  } else {
-    meta = `schedule: "${nextSchedule}"\n${meta}`;
-  }
-  return `---\n${meta}\n---${body.startsWith("\n") ? body : `\n${body}`}`;
-}
-
-function FeedbackButton({
-  state,
-  idleLabel,
-  workingLabel,
-  okLabel,
-  onClick,
-  disabled,
-  className,
-}: {
-  state: ActionState;
-  idleLabel: string;
-  workingLabel: string;
-  okLabel: string;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  const label = state === "working" ? workingLabel : state === "ok" ? okLabel : idleLabel;
-  const classes = [className || "", state === "ok" ? "flash-ok" : "", state === "working" ? "is-working" : ""]
-    .filter(Boolean)
-    .join(" ");
-  return (
-    <button className={classes} onClick={onClick} disabled={disabled || state === "working"}>
-      {label}
-    </button>
-  );
+function buildRelPath(dept: string, sub: "cron" | "goals", name: string) {
+  const file = name.trim().replace(/[^\w.-]+/g, "-");
+  return `${dept}/${sub}/${file}.md`;
 }

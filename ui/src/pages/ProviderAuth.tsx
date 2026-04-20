@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
+import { Banner } from "../components/Banner";
 
 export function ProviderAuth({ onAdvance }: { onAdvance: () => Promise<void> }) {
   const [status, setStatus] = useState<any>(null);
@@ -81,12 +83,11 @@ function ClaudeCard({ status, onChange }: { status: any; onChange: () => void })
   const canStart = !detected && session?.status !== "waiting";
 
   return (
-    <div className="card col">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0 }}>Claude Code</h3>
-        {detected ? <span className="badge ok">connected</span> : <span className="badge">not connected</span>}
-      </div>
-      {s?.snapshot?.email && <div className="small muted">{s.snapshot.email} · {s.snapshot.subscriptionType}</div>}
+    <Section
+      title="Claude Code"
+      actions={detected ? <span className="badge ok">connected</span> : <span className="badge">not connected</span>}
+    >
+      {s?.snapshot?.email && <div className="small muted">{s.snapshot.email} \u00b7 {s.snapshot.subscriptionType}</div>}
       {canStart && <button onClick={start} disabled={starting}>{starting ? "…" : "Connect Claude Code"}</button>}
       {session?.status === "waiting" && (
         <div className="col">
@@ -102,9 +103,9 @@ function ClaudeCard({ status, onChange }: { status: any; onChange: () => void })
           {submitting && <div className="small muted">Waiting for Claude Code to finish sign-in…</div>}
         </div>
       )}
-      {session?.status === "failed" && <div className="badge err">{session.error || "failed"}</div>}
-      {error && <div className="badge err">{error}</div>}
-    </div>
+      {session?.status === "failed" && <Banner kind="err">{session.error || "failed"}</Banner>}
+      {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
+    </Section>
   );
 }
 
@@ -141,12 +142,11 @@ function CodexCard({ status, onChange }: { status: any; onChange: () => void }) 
   const detected = !!s?.detected;
 
   return (
-    <div className="card col">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0 }}>Codex</h3>
-        {detected ? <span className="badge ok">connected</span> : <span className="badge">not connected</span>}
-      </div>
-      {!detected && !session && <button onClick={start} disabled={starting}>{starting ? "…" : "Connect Codex"}</button>}
+    <Section
+      title="Codex"
+      actions={detected ? <span className="badge ok">connected</span> : <span className="badge">not connected</span>}
+    >
+      {!detected && !session && <button onClick={start} disabled={starting}>{starting ? "\u2026" : "Connect Codex"}</button>}
       {session?.status === "waiting" && (
         <div className="col">
           {session.verificationUrl
@@ -158,8 +158,8 @@ function CodexCard({ status, onChange }: { status: any; onChange: () => void }) 
           </div>
         </div>
       )}
-      {session?.status === "failed" && <div className="badge err">{session.error || "failed"}</div>}
-      {error && <div className="badge err">{error}</div>}
-    </div>
+      {session?.status === "failed" && <Banner kind="err">{session.error || "failed"}</Banner>}
+      {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
+    </Section>
   );
 }
