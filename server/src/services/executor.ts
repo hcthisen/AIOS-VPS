@@ -19,6 +19,7 @@ import { gitRun } from "./repo";
 import { runSyncLayer } from "./sync";
 
 export type Provider = "claude-code" | "codex";
+type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access" | "bypass";
 
 export interface RunRequest {
   departments: string[];
@@ -59,12 +60,26 @@ function buildEnv(provider: Provider): NodeJS.ProcessEnv {
   return provider === "claude-code" ? buildAnthropicAuthEnv() : buildOpenAiAuthEnv();
 }
 
+function getCodexSandboxMode(): CodexSandboxMode {
+  const configured = String(process.env.AIOS_CODEX_SANDBOX || "danger-full-access").trim() as CodexSandboxMode;
+  if (configured === "read-only" || configured === "workspace-write" || configured === "danger-full-access" || configured === "bypass") {
+    return configured;
+  }
+  log.warn("invalid AIOS_CODEX_SANDBOX value; defaulting to danger-full-access", configured);
+  return "danger-full-access";
+}
+
 function cliArgs(provider: Provider, prompt: string): { bin: string; args: string[]; stdin?: string } {
   // Both CLIs accept a headless prompt path. Use stdin to avoid argv-length/escape concerns.
   if (provider === "claude-code") {
     return { bin: "claude", args: ["--print", "--permission-mode", "acceptEdits"], stdin: prompt };
   }
-  return { bin: "codex", args: ["exec", "--skip-git-repo-check", "-"], stdin: prompt };
+  const sandbox = getCodexSandboxMode();
+  const args = ["exec", "--skip-git-repo-check"];
+  if (sandbox === "bypass") args.push("--dangerously-bypass-approvals-and-sandbox");
+  else args.push("--sandbox", sandbox);
+  args.push("-");
+  return { bin: "codex", args, stdin: prompt };
 }
 
 export interface StartRunResult { run: Run; accepted: boolean; queued?: boolean; reason?: string; }
@@ -125,12 +140,23 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
   }
   activeProcesses.set(runId, child);
 
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
+
   const pipe = (chunk: Buffer) => {
     appendFile(logPath, chunk).catch(() => {});
     runEvents.emit("run.output", { runId, chunk: chunk.toString("utf-8") });
   };
-  child.stdout?.on("data", pipe);
-  child.stderr?.on("data", pipe);
+  if (provider === "codex") {
+    child.stdout?.on("data", (chunk: Buffer) => { stdoutChunks.push(Buffer.from(chunk)); });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderrChunks.push(Buffer.from(chunk));
+      pipe(chunk);
+    });
+  } else {
+    child.stdout?.on("data", pipe);
+    child.stderr?.on("data", pipe);
+  }
 
   if (stdin && child.stdin) {
     child.stdin.write(stdin);
@@ -142,6 +168,15 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
   });
   const { code, signal } = await exit;
   activeProcesses.delete(runId);
+
+  if (provider === "codex") {
+    const stdoutText = Buffer.concat(stdoutChunks).toString("utf-8");
+    const stderrText = Buffer.concat(stderrChunks).toString("utf-8");
+    if (shouldAppendCodexStdout(stdoutText, stderrText)) {
+      const chunk = Buffer.from(stdoutText, "utf-8");
+      pipe(chunk);
+    }
+  }
 
   let commitSha: string | null = null;
   if (code === 0 && req.commitOnSuccess !== false) {
@@ -277,4 +312,18 @@ function lastDecimalMatch(text: string, patterns: RegExp[]): number | null {
     if (last !== null && Number.isFinite(last)) return last;
   }
   return null;
+}
+
+function shouldAppendCodexStdout(stdoutText: string, stderrText: string): boolean {
+  const normalizedStdout = normalizeExecText(stdoutText);
+  if (!normalizedStdout) return false;
+  const normalizedStderr = normalizeExecText(stderrText);
+  return !normalizedStderr.includes(normalizedStdout);
+}
+
+function normalizeExecText(text: string): string {
+  return text
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+    .replace(/\r/g, "")
+    .trim();
 }

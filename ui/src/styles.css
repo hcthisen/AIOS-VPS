@@ -17,7 +17,7 @@ body {
   background: var(--bg); color: var(--text); font-size: 14px;
 }
 code, pre, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-a { color: var(--accent-2); text-decoration: none; }
+a { color: var(--accent-2); text-decoration: none; cursor: pointer; }
 a:hover { text-decoration: underline; }
 button, input, textarea, select {
   font: inherit; color: inherit;
@@ -27,6 +27,13 @@ button, input, textarea, select {
 button { cursor: pointer; }
 button.primary { background: var(--accent); color: #0b0d10; border-color: var(--accent); font-weight: 600; }
 button.danger  { background: var(--danger); border-color: var(--danger); color: #0b0d10; font-weight: 600; }
+button.is-working { opacity: 0.8; }
+button.flash-ok {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b0d10;
+  animation: button-flash 0.7s ease;
+}
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 input, textarea, select { width: 100%; }
 textarea { min-height: 120px; resize: vertical; }
@@ -75,4 +82,9 @@ pre.log {
   border-radius: 6px; border: 1px solid var(--border); font-size: 20px; letter-spacing: 0.2em;
 }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@keyframes button-flash {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
 @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }

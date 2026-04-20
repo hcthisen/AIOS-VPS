@@ -7,7 +7,7 @@ import { dirname, join } from "path";
 import { timingSafeEqual } from "crypto";
 import matter from "gray-matter";
 
-import { Router, badRequest, notFound } from "../http";
+import { Router, badRequest, notFound, AiosRequest } from "../http";
 import { adminOnly } from "../auth";
 import { config } from "../config";
 import { listDepartments, listCronTasks, listGoals } from "../services/departments";
@@ -192,6 +192,11 @@ export function registerDashboardRoutes(router: Router) {
   });
 
   // ---------- Webhooks ----------
+  router.get("/api/webhooks/handlers", async (req, res) => {
+    await guard(req, res);
+    res.json({ handlers: await listWebhookHandlers() });
+  });
+
   // Admin view of deliveries.
   router.get("/api/webhooks/deliveries", async (req, res) => {
     await guard(req, res);
@@ -205,16 +210,17 @@ export function registerDashboardRoutes(router: Router) {
     const name = req.params.name;
     const endpoint = `${dept}/${name}`;
     const payload = req.body || {};
+    const source = describeWebhookSource(req);
     const depts = await listDepartments();
     if (!depts.some((d) => d.name === dept)) {
-      recordDelivery({ department: dept, endpoint, payload, outcome: "rejected:unknown-dept" });
+      recordDelivery({ department: dept, endpoint, source, payload, outcome: "rejected:unknown-dept" });
       res.error(404, "unknown department");
       return;
     }
     // Find a matching prompt file: <dept>/webhooks/<name>.md
     const promptPath = join(config.repoDir, dept, "webhooks", `${name}.md`);
     if (!existsSync(promptPath)) {
-      recordDelivery({ department: dept, endpoint, payload, outcome: "rejected:no-handler" });
+      recordDelivery({ department: dept, endpoint, source, payload, outcome: "rejected:no-handler" });
       res.error(404, "no handler");
       return;
     }
@@ -234,13 +240,13 @@ export function registerDashboardRoutes(router: Router) {
       || "",
     ).trim();
     if (requiredKey && !matchesSecret(requiredKey, suppliedKey)) {
-      recordDelivery({ department: dept, endpoint, payload, outcome: "rejected:bad-key" });
+      recordDelivery({ department: dept, endpoint, source, payload, outcome: "rejected:bad-key" });
       res.error(401, "invalid webhook key");
       return;
     }
     const prompt = `${parsed.content.trim()}\n\n---\nPayload:\n${JSON.stringify(payload, null, 2)}`;
     const r = await startRun({ departments: [dept], trigger: `webhook:${endpoint}`, prompt });
-    recordDelivery({ department: dept, endpoint, payload, outcome: r.accepted ? `run:${r.run.id}` : "queued" });
+    recordDelivery({ department: dept, endpoint, source, payload, outcome: r.accepted ? `run:${r.run.id}` : "queued" });
     res.json({ ok: true, runId: r.run.id, accepted: r.accepted });
   });
 
@@ -335,10 +341,10 @@ export function registerDashboardRoutes(router: Router) {
   });
 }
 
-function recordDelivery(d: { department: string; endpoint: string; payload: unknown; outcome: string }) {
+function recordDelivery(d: { department: string; endpoint: string; source?: string | null; payload: unknown; outcome: string }) {
   db.prepare(`INSERT INTO webhook_deliveries(department, endpoint, source, payload, outcome, received_at)
               VALUES(?, ?, ?, ?, ?, ?)`)
-    .run(d.department, d.endpoint, null, JSON.stringify(d.payload).slice(0, 8000), d.outcome, Date.now());
+    .run(d.department, d.endpoint, d.source || null, JSON.stringify(d.payload).slice(0, 8000), d.outcome, Date.now());
 }
 
 function matchesSecret(expected: string, actual: string): boolean {
@@ -347,4 +353,93 @@ function matchesSecret(expected: string, actual: string): boolean {
   const b = Buffer.from(actual, "utf-8");
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
+}
+
+function describeWebhookSource(req: AiosRequest): string | null {
+  const forwarded = String(req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"] || "").split(",")[0]?.trim();
+  const remote = req.socket?.remoteAddress?.trim() || "";
+  const userAgent = String(req.headers["user-agent"] || "").trim();
+  const address = forwarded || remote;
+  if (!address && !userAgent) return null;
+  if (!address) return userAgent.slice(0, 180);
+  if (!userAgent) return address;
+  return `${address} | ${userAgent.slice(0, 180)}`;
+}
+
+function firstPromptLine(prompt: string): string {
+  const line = prompt
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .find((entry) => !!entry);
+  return line || "(empty handler)";
+}
+
+async function listWebhookHandlers() {
+  const depts = await listDepartments();
+  const recent = db.prepare("SELECT endpoint, outcome, received_at FROM webhook_deliveries ORDER BY received_at DESC LIMIT 1000").all() as Array<{
+    endpoint: string;
+    outcome: string;
+    received_at: number;
+  }>;
+  const recentByEndpoint = new Map<string, { lastOutcome: string; lastReceivedAt: number; deliveries: number }>();
+  for (const row of recent) {
+    const existing = recentByEndpoint.get(row.endpoint);
+    if (existing) {
+      existing.deliveries += 1;
+      continue;
+    }
+    recentByEndpoint.set(row.endpoint, {
+      lastOutcome: row.outcome,
+      lastReceivedAt: row.received_at,
+      deliveries: 1,
+    });
+  }
+
+  const handlers: Array<{
+    department: string;
+    name: string;
+    endpoint: string;
+    relPath: string;
+    hasSecret: boolean;
+    promptPreview: string;
+    deliveries: number;
+    lastOutcome: string | null;
+    lastReceivedAt: number | null;
+  }> = [];
+
+  for (const dept of depts) {
+    const webhooksDir = join(dept.path, "webhooks");
+    if (!existsSync(webhooksDir)) continue;
+    const files = await readdir(webhooksDir).catch(() => []);
+    for (const file of files) {
+      if (!file.endsWith(".md")) continue;
+      const raw = await readFile(join(webhooksDir, file), "utf-8").catch(() => "");
+      if (!raw) continue;
+      const parsed = matter(raw);
+      const name = file.replace(/\.md$/, "");
+      const endpoint = `${dept.name}/${name}`;
+      const requiredKey = String(
+        parsed.data.webhookKey
+        || parsed.data.webhookSecret
+        || parsed.data.key
+        || parsed.data.secret
+        || "",
+      ).trim();
+      const stats = recentByEndpoint.get(endpoint);
+      handlers.push({
+        department: dept.name,
+        name,
+        endpoint,
+        relPath: `${dept.name}/webhooks/${file}`,
+        hasSecret: !!requiredKey,
+        promptPreview: firstPromptLine(parsed.content.trim()),
+        deliveries: stats?.deliveries || 0,
+        lastOutcome: stats?.lastOutcome || null,
+        lastReceivedAt: stats?.lastReceivedAt || null,
+      });
+    }
+  }
+
+  handlers.sort((a, b) => a.endpoint.localeCompare(b.endpoint));
+  return handlers;
 }

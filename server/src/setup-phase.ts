@@ -6,6 +6,7 @@ export type SetupPhase =
   | "provider_setup"
   | "github_setup"
   | "repo_setup"
+  | "context_setup"
   | "notifications"
   | "complete";
 
@@ -15,6 +16,7 @@ const PHASES: SetupPhase[] = [
   "provider_setup",
   "github_setup",
   "repo_setup",
+  "context_setup",
   "notifications",
   "complete",
 ];

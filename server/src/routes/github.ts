@@ -7,7 +7,7 @@ import {
   setGithubCreds, getGithubCreds, verifyPat, listRepos, createRepo,
 } from "../services/github";
 import { config } from "../config";
-import { cloneRepo, scaffoldRepo, validateAiosRepo, gitRun, repoHead } from "../services/repo";
+import { cloneRepo, scaffoldRepo, validateAiosRepo, gitRun, repoHead, readRepoContext, writeRepoContext } from "../services/repo";
 import { advanceSetupPhase, getSetupPhase, setSetupPhase } from "../setup-phase";
 import {
   approveTelegramPairing,
@@ -19,6 +19,7 @@ import {
   syncTelegramPairing,
 } from "../services/notifications";
 import { buildCommonAuthEnv } from "../services/provider-auth";
+import { runSyncLayer } from "../services/sync";
 import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
@@ -121,6 +122,35 @@ export function registerOnboardingRoutes(router: Router) {
     res.json({ cloned, ...validation });
   });
 
+  // ---------- Shared context ----------
+  router.get("/api/onboarding/context", async (req, res) => {
+    await guard(req, res);
+    const fallbackName = config.repoDir.split(/[\\/]/).pop() || "AIOS deployment";
+    const context = await readRepoContext(config.repoDir, fallbackName);
+    res.json(context);
+  });
+
+  router.post("/api/onboarding/context/save", async (req, res) => {
+    await guard(req, res);
+    const body = req.body || {};
+    const organizationName = String(body.organizationName || "").trim();
+    const deploymentScope = String(body.deploymentScope || "").trim();
+    if (!organizationName || !deploymentScope) {
+      throw badRequest("organizationName and deploymentScope required");
+    }
+    await writeRepoContext(config.repoDir, {
+      organizationName,
+      deploymentScope,
+      parentScope: String(body.parentScope || "").trim(),
+      scopeSummary: String(body.scopeSummary || "").trim(),
+      outsideRepoContext: String(body.outsideRepoContext || "").trim(),
+      sharedConventions: String(body.sharedConventions || "").trim(),
+    });
+    await runSyncLayer({ commit: false });
+    if (getSetupPhase() === "context_setup") advanceSetupPhase("context_setup");
+    res.json({ ok: true, setupPhase: getSetupPhase() });
+  });
+
   // ---------- Notifications ----------
   router.post("/api/onboarding/notifications/save", async (req, res) => {
     await guard(req, res);
@@ -208,7 +238,7 @@ export function registerOnboardingRoutes(router: Router) {
 
   router.post("/api/onboarding/complete", async (req, res) => {
     await guard(req, res);
-    if (["notifications", "github_setup", "repo_setup"].includes(getSetupPhase())) {
+    if (["notifications", "context_setup", "github_setup", "repo_setup"].includes(getSetupPhase())) {
       setSetupPhase("complete");
     }
     res.json({ ok: true, setupPhase: getSetupPhase() });

@@ -6,6 +6,7 @@ import { VpsDomainSetup } from "./pages/VpsDomainSetup";
 import { ProviderAuth } from "./pages/ProviderAuth";
 import { GithubSetup } from "./pages/GithubSetup";
 import { RepoSetup } from "./pages/RepoSetup";
+import { ContextSetup } from "./pages/ContextSetup";
 import { NotificationsSetup } from "./pages/NotificationsSetup";
 import { Overview } from "./pages/Overview";
 import { RunsPage } from "./pages/Runs";
@@ -96,6 +97,7 @@ function setupPhaseToRoute(phase: string) {
     case "provider_setup": return "/setup/providers";
     case "github_setup": return "/setup/github";
     case "repo_setup": return "/setup/repo";
+    case "context_setup": return "/setup/context";
     case "notifications": return "/setup/notifications";
     default: return "/";
   }
@@ -108,6 +110,7 @@ function SetupLayout({ me, onAdvance, navigate, path }: { me: Me; onAdvance: () 
     ["provider_setup", "Providers"],
     ["github_setup", "GitHub"],
     ["repo_setup", "Repo"],
+    ["context_setup", "Context"],
     ["notifications", "Notifications"],
     ["complete", "Done"],
   ] as const;
@@ -124,7 +127,8 @@ function SetupLayout({ me, onAdvance, navigate, path }: { me: Me; onAdvance: () 
       {page === "domain" && <VpsDomainSetup onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "domain_setup") navigate("/setup/providers"); }} />}
       {page === "providers" && <ProviderAuth onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "provider_setup") navigate("/setup/github"); }} />}
       {page === "github" && <GithubSetup onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "github_setup") navigate("/setup/repo"); }} />}
-      {page === "repo" && <RepoSetup onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "repo_setup") navigate("/setup/notifications"); }} />}
+      {page === "repo" && <RepoSetup onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "repo_setup") navigate("/setup/context"); }} />}
+      {page === "context" && <ContextSetup onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "context_setup") navigate("/setup/notifications"); }} />}
       {page === "notifications" && <NotificationsSetup onAdvance={async () => { await api("/api/onboarding/complete", { method: "POST" }); await onAdvance(); navigate("/"); }} />}
     </div>
   );
@@ -138,7 +142,7 @@ function Page({ path, navigate, me, refresh }: { path: string; navigate: (t: str
   if (path.startsWith("/departments/")) return <DepartmentDetail name={decodeURIComponent(path.split("/")[2])} navigate={navigate} />;
   if (path === "/manual") return <ManualRunPage />;
   if (path === "/backlog") return <BacklogPage />;
-  if (path === "/webhooks") return <WebhooksPage />;
+  if (path === "/webhooks") return <WebhooksPage navigate={navigate} />;
   if (path === "/usage") return <UsagePage />;
   if (path === "/terminal") return <TerminalPage />;
   if (path === "/settings") return <SettingsPage />;

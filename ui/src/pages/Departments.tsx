@@ -14,7 +14,7 @@ export function DepartmentsPage({ navigate }: { navigate: (t: string) => void })
         <tbody>
           {data?.departments?.map((d: any) => (
             <tr key={d.name}>
-              <td><b>{d.name}</b></td>
+              <td><a onClick={() => navigate(`/departments/${encodeURIComponent(d.name)}`)}><b>{d.name}</b></a></td>
               <td>{d.claim ? <span className="badge warn">claimed</span> : <span className="badge ok">free</span>}</td>
               <td><a onClick={() => navigate(`/departments/${encodeURIComponent(d.name)}`)}>view</a></td>
             </tr>

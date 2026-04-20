@@ -5,6 +5,7 @@ import { promisify } from "util";
 import { mkdir, writeFile, readFile, stat } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
+import matter from "gray-matter";
 
 import { config } from "../config";
 import { buildCommonAuthEnv } from "./provider-auth";
@@ -18,6 +19,15 @@ export interface AiosYaml {
   ignored?: string[];
   mirrors?: Array<{ source: string; target: string }>;
   notifications?: { default?: string };
+}
+
+export interface AiosContextInput {
+  organizationName: string;
+  deploymentScope: string;
+  parentScope?: string;
+  scopeSummary: string;
+  outsideRepoContext: string;
+  sharedConventions: string;
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -135,6 +145,150 @@ function coerce(s: string): any {
   return s;
 }
 
+function yamlQuote(value: string) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function trimParagraph(value: string, fallback: string) {
+  const trimmed = String(value || "").trim();
+  return trimmed || fallback;
+}
+
+function buildDefaultContext(name: string): AiosContextInput {
+  return {
+    organizationName: name,
+    deploymentScope: name,
+    parentScope: "",
+    scopeSummary: `This AIOS deployment manages ${name}. Use it as the source of truth for the teams and automations that live in this repository.`,
+    outsideRepoContext: "Describe the broader organization, adjacent teams, systems, or responsibilities that exist outside this repository.",
+    sharedConventions: "Document shared conventions, approval rules, tone, compliance requirements, and other guidance every department should inherit.",
+  };
+}
+
+function buildRootOrgMd(input: AiosContextInput): string {
+  const parentScope = String(input.parentScope || "").trim();
+  return `---
+organization_name: ${yamlQuote(input.organizationName)}
+deployment_scope: ${yamlQuote(input.deploymentScope)}
+parent_scope: ${yamlQuote(parentScope)}
+---
+# Organization context
+
+## Organization
+${trimParagraph(input.organizationName, "Describe the organization this AIOS belongs to.")}
+
+## AIOS deployment scope
+${trimParagraph(input.scopeSummary, "Describe the part of the organization this AIOS is responsible for.")}
+
+## Parent organization or department
+${trimParagraph(parentScope, "This AIOS is deployed at the organization root.")}
+
+## Outside this repository
+${trimParagraph(input.outsideRepoContext, "List the teams, systems, or responsibilities that sit outside this repository but may matter to the work here.")}
+
+## Shared conventions
+${trimParagraph(input.sharedConventions, "List the conventions, constraints, and expectations every department in this AIOS should follow.")}
+`;
+}
+
+function buildRootContextMd(input: AiosContextInput): string {
+  const parentScope = String(input.parentScope || "").trim();
+  const parentLine = parentScope
+    ? `- This AIOS sits inside ${parentScope}.`
+    : "- This AIOS is the root operating scope for this repository.";
+  return `# Root context - ${input.deploymentScope}
+
+One-line summary: AIOS workspace for ${input.deploymentScope} in ${input.organizationName}.
+
+## Scope of this repository
+- This repository serves ${input.deploymentScope}.
+${parentLine}
+- Root-level folders listed in \`aios.yaml\` are departments within this AIOS deployment.
+
+## Shared context files
+- \`org.md\` is the authored organization and deployment context for the whole AIOS.
+- Every department receives a synced copy of \`org.md\` so shared context is available from inside the folder.
+- Every department also receives an auto-generated \`_org.md\` listing sibling departments and their one-line summaries.
+
+## Department conventions
+- Keep department-specific instructions in each department's \`CLAUDE.md\` and \`AGENTS.md\`.
+- Put scheduled prompts in \`cron/*.md\` with a \`schedule\` frontmatter field.
+- Put long-running objectives and recurring work in \`goals/\`.
+- Put reusable local skills in \`skills/\`.
+
+## Cross-department work
+- Start from the local department folder and only leave it when the task clearly requires cross-department context or collaboration.
+- Use \`org.md\` to understand the larger business context.
+- Use \`_org.md\` to discover which sibling departments exist before reading outside the current folder.
+`;
+}
+
+function buildDepartmentContextMd(name: string): string {
+  return `# ${name} department - Department responsible for ${name} work in this AIOS deployment
+
+One-line summary: ${name} is a department inside this AIOS deployment and owns the work routed into this folder.
+
+## Role in this deployment
+- This folder is one department inside a larger AIOS deployment, which may itself be only one part of a larger company or parent department.
+- Keep the information this department always needs inside this folder.
+- Use shared context files when work needs organizational awareness outside this folder.
+
+## Local structure
+- \`cron/\`: scheduled prompts for recurring work. Each markdown file is a task with frontmatter such as \`schedule: "0 * * * *"\`.
+- \`goals/\`: long-running goals, standing objectives, or recurring work definitions.
+- \`skills/\`: reusable local skills and operating procedures for this department.
+- \`logs/\`: optional local logs or generated artifacts when the department needs them.
+
+## Shared context
+- \`org.md\`: authored organization and deployment-scope context copied from the repo root.
+- \`_org.md\`: auto-generated map of sibling departments and their one-line summaries.
+- Read both before coordinating outside this folder.
+
+## Cross-department work
+- Start from this folder's files and solve the task locally when possible.
+- If the task depends on another department, use \`_org.md\` to discover the right folder and then inspect that folder directly.
+- Do not assume shared knowledge that is not written in this folder, \`org.md\`, or the target department's files.
+`;
+}
+
+function extractSection(content: string, heading: string): string | undefined {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = content.match(new RegExp(`## ${escaped}\\r?\\n([\\s\\S]*?)(?=\\n## |$)`));
+  return match?.[1]?.trim() || undefined;
+}
+
+export async function readRepoContext(dir: string, fallbackName = "AIOS deployment"): Promise<AiosContextInput> {
+  const defaults = buildDefaultContext(fallbackName);
+  const orgPath = join(dir, "org.md");
+  if (!existsSync(orgPath)) return defaults;
+  const raw = await readFile(orgPath, "utf-8");
+  const parsed = matter(raw);
+  const frontmatter = parsed.data as Record<string, unknown>;
+  return {
+    organizationName: String(frontmatter.organization_name || defaults.organizationName).trim(),
+    deploymentScope: String(frontmatter.deployment_scope || defaults.deploymentScope).trim(),
+    parentScope: String(frontmatter.parent_scope || "").trim(),
+    scopeSummary: extractSection(parsed.content, "AIOS deployment scope") || defaults.scopeSummary,
+    outsideRepoContext: extractSection(parsed.content, "Outside this repository") || defaults.outsideRepoContext,
+    sharedConventions: extractSection(parsed.content, "Shared conventions") || defaults.sharedConventions,
+  };
+}
+
+export async function writeRepoContext(dir: string, input: AiosContextInput): Promise<void> {
+  const normalized: AiosContextInput = {
+    organizationName: trimParagraph(input.organizationName, "AIOS deployment"),
+    deploymentScope: trimParagraph(input.deploymentScope, trimParagraph(input.organizationName, "AIOS deployment")),
+    parentScope: String(input.parentScope || "").trim(),
+    scopeSummary: trimParagraph(input.scopeSummary, "Describe what this AIOS deployment is responsible for."),
+    outsideRepoContext: trimParagraph(input.outsideRepoContext, "Describe the broader organization outside this repository."),
+    sharedConventions: trimParagraph(input.sharedConventions, "Describe the conventions every department should follow."),
+  };
+  await writeFile(join(dir, "org.md"), buildRootOrgMd(normalized));
+  const rootContext = buildRootContextMd(normalized);
+  await writeFile(join(dir, "CLAUDE.md"), rootContext);
+  await writeFile(join(dir, "AGENTS.md"), rootContext);
+}
+
 export async function scaffoldRepo(dir: string, opts: { name: string }): Promise<void> {
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "aios.yaml"),
@@ -146,12 +300,7 @@ ignored:
   - .git
   - dashboard
 `);
-  await writeFile(join(dir, "CLAUDE.md"),
-    `# ${opts.name} - root context\n\nThis is the AIOS-managed monorepo for ${opts.name}. Top-level folders listed in \`aios.yaml\` are departments.\n`);
-  await writeFile(join(dir, "AGENTS.md"),
-    `# ${opts.name} - root context\n\nThis is the AIOS-managed monorepo for ${opts.name}. Top-level folders listed in \`aios.yaml\` are departments.\n`);
-  await writeFile(join(dir, "org.md"),
-    "# Organization\n\nReplace this with a description of your business, priorities, and shared conventions.\n");
+  await writeRepoContext(dir, buildDefaultContext(opts.name));
   await writeFile(join(dir, "README.md"),
     `# ${opts.name}\n\nManaged by AIOS. See \`aios.yaml\` for the department list.\n`);
   await writeFile(join(dir, ".gitignore"),
@@ -162,10 +311,9 @@ ignored:
   await mkdir(join(dept, "goals"), { recursive: true });
   await mkdir(join(dept, "skills"), { recursive: true });
   await mkdir(join(dept, "logs"), { recursive: true });
-  await writeFile(join(dept, "CLAUDE.md"),
-    "# sample department\n\nOne-line summary: sample department used to demonstrate the AIOS execution model.\n");
-  await writeFile(join(dept, "AGENTS.md"),
-    "# sample department\n\nOne-line summary: sample department used to demonstrate the AIOS execution model.\n");
+  const sampleContext = buildDepartmentContextMd("sample");
+  await writeFile(join(dept, "CLAUDE.md"), sampleContext);
+  await writeFile(join(dept, "AGENTS.md"), sampleContext);
   await writeFile(join(dept, "cron", "hello.md"),
     `---
 schedule: "0 * * * *"

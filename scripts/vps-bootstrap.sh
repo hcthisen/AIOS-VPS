@@ -33,6 +33,7 @@ AIOS_REPO_DIR="${AIOS_REPO_DIR:-${AIOS_HOME}/repo}"
 AIOS_PORT="${AIOS_PORT:-3100}"
 AIOS_NODE_MAJOR="${AIOS_NODE_MAJOR:-20}"
 AIOS_SKIP_CLIS="${AIOS_SKIP_CLIS:-0}"
+AIOS_CODEX_SANDBOX="${AIOS_CODEX_SANDBOX:-danger-full-access}"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -47,7 +48,7 @@ log "installing base packages"
 apt-get update -qq
 apt-get install -y -qq \
   ca-certificates curl wget gnupg lsb-release \
-  git build-essential python3 ufw jq dnsutils rsync \
+  git build-essential python3 ufw jq dnsutils rsync bubblewrap \
   debian-keyring debian-archive-keyring apt-transport-https
 
 # ---------- 2. Node.js LTS ----------
@@ -208,6 +209,7 @@ Environment=AIOS_DATA_DIR=${AIOS_INSTALL_DIR}/data
 Environment=AIOS_REPO_DIR=${AIOS_REPO_DIR}
 Environment=AIOS_USER=${AIOS_USER}
 Environment=AIOS_HOME=${AIOS_HOME}
+Environment=AIOS_CODEX_SANDBOX=${AIOS_CODEX_SANDBOX}
 ExecStart=/usr/bin/node ${AIOS_INSTALL_DIR}/server/dist/index.js
 Restart=on-failure
 RestartSec=3
