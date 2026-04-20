@@ -36,12 +36,18 @@ AIOS_SKIP_CLIS="${AIOS_SKIP_CLIS:-0}"
 
 export DEBIAN_FRONTEND=noninteractive
 
+run_as_aios_home() {
+  local command="$1"
+  sudo -u "${AIOS_USER}" env HOME="${AIOS_HOME}" USERPROFILE="${AIOS_HOME}" bash -c \
+    "export HOME='${AIOS_HOME}' USERPROFILE='${AIOS_HOME}' PATH=\"\$HOME/.local/bin:\$PATH\"; ${command}"
+}
+
 # ---------- 1. Base packages ----------
 log "installing base packages"
 apt-get update -qq
 apt-get install -y -qq \
   ca-certificates curl wget gnupg lsb-release \
-  git build-essential python3 ufw jq dnsutils \
+  git build-essential python3 ufw jq dnsutils rsync \
   debian-keyring debian-archive-keyring apt-transport-https
 
 # ---------- 2. Node.js LTS ----------
@@ -84,10 +90,17 @@ fi
 systemctl stop caddy 2>/dev/null || true
 systemctl disable caddy 2>/dev/null || true
 
-# App user owns the Caddyfile so the dashboard can rewrite it without root.
-if [[ -f /etc/caddy/Caddyfile ]]; then
-  chown "${AIOS_USER}":"${AIOS_USER}" /etc/caddy/Caddyfile
+# Seed a writable placeholder so the dashboard can rewrite it without root.
+install -d -m 0755 /etc/caddy
+if [[ ! -f /etc/caddy/Caddyfile ]]; then
+  cat > /etc/caddy/Caddyfile <<EOF
+:80 {
+    respond "AIOS domain setup pending" 200
+}
+EOF
 fi
+chown "${AIOS_USER}":"${AIOS_USER}" /etc/caddy/Caddyfile
+chmod 0644 /etc/caddy/Caddyfile
 
 # Drop a reference template (never overwrites an operator-hand-edited one).
 if [[ ! -f /etc/caddy/Caddyfile.template ]]; then
@@ -106,6 +119,7 @@ cat > "${SUDOERS_FILE}.tmp" <<EOF
 ${AIOS_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl enable caddy, \\
     /usr/bin/systemctl start caddy, \\
     /usr/bin/systemctl reload caddy, \\
+    /usr/bin/systemctl restart caddy, \\
     /usr/bin/systemctl restart aios
 EOF
 # visudo -c -f validates before swap, so a typo can't lock us out.
@@ -125,6 +139,11 @@ if [[ ! -f "${AIOS_HOME}/.claude.json" ]]; then
   chown "${AIOS_USER}":"${AIOS_USER}" "${AIOS_HOME}/.claude.json"
   chmod 600 "${AIOS_HOME}/.claude.json"
 fi
+if [[ ! -f "${AIOS_HOME}/.claude/.claude.json" ]]; then
+  cp "${AIOS_HOME}/.claude.json" "${AIOS_HOME}/.claude/.claude.json"
+  chown "${AIOS_USER}":"${AIOS_USER}" "${AIOS_HOME}/.claude/.claude.json"
+  chmod 600 "${AIOS_HOME}/.claude/.claude.json"
+fi
 
 if ! grep -qs '.local/bin' "${AIOS_HOME}/.bashrc"; then
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "${AIOS_HOME}/.bashrc"
@@ -132,11 +151,24 @@ if ! grep -qs '.local/bin' "${AIOS_HOME}/.bashrc"; then
 fi
 
 if [[ "${AIOS_SKIP_CLIS}" != "1" ]]; then
-  if ! sudo -u "${AIOS_USER}" bash -lc 'command -v claude' >/dev/null 2>&1; then
+  if ! run_as_aios_home 'command -v claude' >/dev/null 2>&1; then
     log "installing Claude Code for ${AIOS_USER}"
-    sudo -u "${AIOS_USER}" bash -lc \
-      'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://claude.ai/install.sh | bash' \
+    run_as_aios_home \
+      'set -o pipefail && curl -fsSL https://claude.ai/install.sh | bash' \
       || warn "Claude Code install returned non-zero; continuing"
+    if run_as_aios_home 'command -v claude' >/dev/null 2>&1; then
+      log "Claude Code installed"
+    else
+      warn "Claude Code not found after installer; falling back to npm user-local install"
+      run_as_aios_home \
+        'npm install --global --prefix "$HOME/.local" @anthropic-ai/claude-code@latest' \
+        || warn "Claude Code npm fallback install returned non-zero; continuing"
+      if run_as_aios_home 'command -v claude' >/dev/null 2>&1; then
+        log "Claude Code installed via npm fallback"
+      else
+        warn "Claude Code still not found on PATH after fallback install"
+      fi
+    fi
   else
     log "Claude Code already present"
   fi

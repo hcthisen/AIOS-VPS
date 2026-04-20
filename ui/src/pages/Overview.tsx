@@ -20,6 +20,11 @@ export function Overview({ navigate }: { navigate: (t: string) => void }) {
     refresh();
   };
 
+  const killAll = async () => {
+    await api("/api/controls/kill-all", { method: "POST" });
+    refresh();
+  };
+
   return (
     <div className="col">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -28,6 +33,9 @@ export function Overview({ navigate }: { navigate: (t: string) => void }) {
           <span className={`badge ${controls?.paused ? "warn" : "ok"}`}>
             {controls?.paused ? "paused" : "running"}
           </span>
+          <button className="danger" onClick={killAll} disabled={!data?.runs?.length}>
+            Kill all + pause
+          </button>
           <button className={controls?.paused ? "primary" : "danger"} onClick={togglePause}>
             {controls?.paused ? "Resume" : "Pause all"}
           </button>

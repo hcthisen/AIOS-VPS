@@ -1,15 +1,23 @@
-import { mkdir } from "fs/promises";
+import { mkdir, writeFile, chmod } from "fs/promises";
 import { existsSync } from "fs";
+import { join } from "path";
 import { Router, badRequest } from "../http";
 import { adminOnly } from "../auth";
 import {
   setGithubCreds, getGithubCreds, verifyPat, listRepos, createRepo,
-  cloneUrlWithPat,
 } from "../services/github";
 import { config } from "../config";
 import { cloneRepo, scaffoldRepo, validateAiosRepo, gitRun, repoHead } from "../services/repo";
 import { advanceSetupPhase, getSetupPhase, setSetupPhase } from "../setup-phase";
-import { getNotificationConfig, setNotificationConfig, sendNotification } from "../services/notifications";
+import {
+  approveTelegramPairing,
+  getNotificationConfig,
+  getTelegramPairingState,
+  primeTelegramPairing,
+  setNotificationConfig,
+  sendNotification,
+  syncTelegramPairing,
+} from "../services/notifications";
 import { buildCommonAuthEnv } from "../services/provider-auth";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -19,23 +27,46 @@ export function registerOnboardingRoutes(router: Router) {
   const guard = adminOnly();
 
   // ---------- GitHub ----------
+  router.get("/api/onboarding/github/status", async (req, res) => {
+    await guard(req, res);
+    const creds = getGithubCreds();
+    res.json({
+      connected: !!creds,
+      mode: creds?.mode || null,
+      username: creds?.username || null,
+      hasPrivateKey: !!creds?.privateKeyPath,
+    });
+  });
+
   router.post("/api/onboarding/github/connect", async (req, res) => {
     await guard(req, res);
     const mode = String(req.body?.mode || "pat");
-    if (mode !== "pat") throw badRequest("only `pat` supported in v1");
-    const token = String(req.body?.token || "");
-    if (!token) throw badRequest("token required");
-    const r = await verifyPat(token);
-    if (!r.ok) throw badRequest(`github verify failed: ${r.error}`);
-    setGithubCreds({ mode: "pat", username: r.login, token });
+    if (mode === "pat") {
+      const token = String(req.body?.token || "");
+      if (!token) throw badRequest("token required");
+      const r = await verifyPat(token);
+      if (!r.ok) throw badRequest(`github verify failed: ${r.error}`);
+      setGithubCreds({ mode: "pat", username: r.login, token });
+      if (getSetupPhase() === "github_setup") advanceSetupPhase("github_setup");
+      res.json({ ok: true, mode, login: r.login, setupPhase: getSetupPhase() });
+      return;
+    }
+    if (mode !== "deploy_key") throw badRequest("unsupported github mode");
+    const privateKey = String(req.body?.privateKey || "").trim();
+    if (!privateKey.includes("PRIVATE KEY")) throw badRequest("private SSH key required");
+    const keyPath = join(config.dataDir, "github_deploy_key");
+    await mkdir(config.dataDir, { recursive: true });
+    await writeFile(keyPath, `${privateKey}\n`, "utf-8");
+    try { await chmod(keyPath, 0o600); } catch {}
+    setGithubCreds({ mode: "deploy_key", privateKeyPath: keyPath });
     if (getSetupPhase() === "github_setup") advanceSetupPhase("github_setup");
-    res.json({ ok: true, login: r.login, setupPhase: getSetupPhase() });
+    res.json({ ok: true, mode, setupPhase: getSetupPhase() });
   });
 
   router.get("/api/onboarding/github/repos", async (req, res) => {
     await guard(req, res);
     const creds = getGithubCreds();
-    if (!creds?.token) throw badRequest("github not connected");
+    if (!creds?.token) throw badRequest("repo listing requires a PAT connection");
     const repos = await listRepos(creds.token);
     res.json({ repos });
   });
@@ -44,7 +75,7 @@ export function registerOnboardingRoutes(router: Router) {
   router.post("/api/onboarding/repo/create", async (req, res) => {
     await guard(req, res);
     const creds = getGithubCreds();
-    if (!creds?.token || !creds.username) throw badRequest("github not connected");
+    if (!creds?.token || !creds.username) throw badRequest("repo creation requires a PAT connection");
     const name = String(req.body?.name || "").trim();
     const isPrivate = !!req.body?.private;
     if (!/^[\w.-]{1,100}$/.test(name)) throw badRequest("invalid repo name");
@@ -96,8 +127,16 @@ export function registerOnboardingRoutes(router: Router) {
     const body = req.body || {};
     const channel = body.channel;
     if (channel === "telegram") {
-      if (!body.botToken || !body.chatId) throw badRequest("botToken and chatId required");
-      setNotificationConfig({ channel, botToken: body.botToken, chatId: String(body.chatId) });
+      const botToken = String(body.botToken || "").trim();
+      if (!botToken) throw badRequest("botToken required");
+      try {
+        const pairing = await primeTelegramPairing(botToken);
+        setNotificationConfig({ channel, botToken, chatId: null });
+        res.json({ ok: true, paired: false, ...pairing });
+        return;
+      } catch (e: any) {
+        throw badRequest(`telegram verify failed: ${e?.message || e}`);
+      }
     } else if (channel === "email") {
       const required = ["from", "to", "smtpHost", "smtpPort"];
       for (const k of required) if (!body[k]) throw badRequest(`${k} required`);
@@ -119,6 +158,28 @@ export function registerOnboardingRoutes(router: Router) {
     res.json({ ok: true });
   });
 
+  router.get("/api/onboarding/notifications/telegram/pairing", async (req, res) => {
+    await guard(req, res);
+    try {
+      const pairing = await syncTelegramPairing();
+      res.json({ ok: true, ...pairing });
+    } catch (e: any) {
+      throw badRequest(String(e?.message || e));
+    }
+  });
+
+  router.post("/api/onboarding/notifications/telegram/approve", async (req, res) => {
+    await guard(req, res);
+    const chatId = String(req.body?.chatId || "").trim();
+    if (!chatId) throw badRequest("chatId required");
+    try {
+      const candidate = approveTelegramPairing(chatId);
+      res.json({ ok: true, candidate, chatId });
+    } catch (e: any) {
+      throw badRequest(String(e?.message || e));
+    }
+  });
+
   router.post("/api/onboarding/notifications/test", async (req, res) => {
     await guard(req, res);
     const r = await sendNotification("AIOS test notification ✓", "AIOS test");
@@ -129,7 +190,16 @@ export function registerOnboardingRoutes(router: Router) {
     await guard(req, res);
     const c = getNotificationConfig();
     // Strip secrets from response
-    if (c.channel === "telegram") res.json({ channel: "telegram", chatId: c.chatId });
+    if (c.channel === "telegram") {
+      const pairing = getTelegramPairingState();
+      res.json({
+        channel: "telegram",
+        chatId: c.chatId || null,
+        paired: !!c.chatId,
+        botName: pairing?.botName,
+        botUsername: pairing?.botUsername,
+      });
+    }
     else if (c.channel === "email") res.json({
       channel: "email", from: c.from, to: c.to, smtpHost: c.smtpHost, smtpPort: c.smtpPort, smtpUser: c.smtpUser, secure: c.secure,
     });

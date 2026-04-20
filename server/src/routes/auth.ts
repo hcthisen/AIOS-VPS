@@ -22,9 +22,8 @@ export function registerAuthRoutes(router: Router) {
     if (!validEmail(email) || password.length < 8) {
       throw badRequest("valid email and 8+ char password required");
     }
-    // First-admin bootstrap: only unauthenticated when there are no users yet.
     if (hasAnyUser()) {
-      if (!req.actor?.isAdmin) throw unauthorized("signup disabled after first admin");
+      throw unauthorized("signup disabled after first admin");
     }
     if (findUserByEmail(email)) throw conflict("email already registered");
     const user = createUser(email, password, true);
@@ -62,7 +61,10 @@ export function registerAuthRoutes(router: Router) {
   });
 
   router.get("/api/auth/me", async (req, res) => {
-    if (!req.actor) { res.json({ user: null, setupPhase: getSetupPhase() }); return; }
+    if (!req.actor) {
+      res.json({ user: null, setupPhase: getSetupPhase(), firstRun: !hasAnyUser() });
+      return;
+    }
     const user = getUser(req.actor.userId);
     res.json({
       user,

@@ -1,29 +1,210 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 
+type Channel = "telegram" | "email" | "none";
+
+interface TelegramPairingCandidate {
+  chatId: string;
+  chatType: string;
+  displayName: string;
+  username?: string;
+  senderName?: string;
+  lastMessage?: string;
+  seenAt: number;
+}
+
+interface TelegramPairingResponse {
+  ok: boolean;
+  botName?: string;
+  botUsername?: string;
+  candidates: TelegramPairingCandidate[];
+  pairedChatId: string | null;
+}
+
+type NotificationConfig =
+  | { channel: "telegram"; chatId: string | null; paired: boolean; botName?: string; botUsername?: string }
+  | { channel: "email"; from: string; to: string; smtpHost: string; smtpPort: number; smtpUser?: string; secure?: boolean }
+  | { channel: "none" };
+
 export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
-  const [channel, setChannel] = useState<"telegram" | "email" | "none">("telegram");
-  const [tg, setTg] = useState({ botToken: "", chatId: "" });
+  const [channel, setChannel] = useState<Channel>("telegram");
+  const [tg, setTg] = useState({ botToken: "" });
   const [mail, setMail] = useState({ from: "", to: "", smtpHost: "", smtpPort: 587, smtpUser: "", smtpPass: "" });
+  const [telegramReady, setTelegramReady] = useState(false);
+  const [pairing, setPairing] = useState<TelegramPairingResponse | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [approvingChatId, setApprovingChatId] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tested, setTested] = useState<string | null>(null);
 
-  const save = async () => {
+  const pairedCandidate = useMemo(
+    () => pairing?.candidates.find((candidate) => candidate.chatId === pairing.pairedChatId) || null,
+    [pairing],
+  );
+
+  async function loadConfig() {
+    const config = await api<NotificationConfig>("/api/onboarding/notifications/config").catch(() => ({ channel: "telegram", chatId: null, paired: false } as NotificationConfig));
+    if (config.channel === "telegram") {
+      setChannel("telegram");
+      setTelegramReady(true);
+      setPairing((previous) => ({
+        ok: true,
+        botName: config.botName,
+        botUsername: config.botUsername,
+        candidates: previous?.candidates || [],
+        pairedChatId: config.chatId,
+      }));
+    } else if (config.channel === "email") {
+      setChannel("email");
+      setMail({
+        from: config.from || "",
+        to: config.to || "",
+        smtpHost: config.smtpHost || "",
+        smtpPort: Number(config.smtpPort) || 587,
+        smtpUser: config.smtpUser || "",
+        smtpPass: "",
+      });
+      setTelegramReady(false);
+      setPairing(null);
+    } else {
+      setChannel("telegram");
+      setTelegramReady(false);
+      setPairing(null);
+    }
+  }
+
+  useEffect(() => {
+    loadConfig().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (channel !== "telegram" || !telegramReady) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const next = await api<TelegramPairingResponse>("/api/onboarding/notifications/telegram/pairing");
+        if (!cancelled) {
+          setPairing(next);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e.message);
+        }
+      }
+    };
+
+    poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [channel, telegramReady]);
+
+  const saveTelegramBotToken = async () => {
+    setSaving(true);
     setError(null);
-    const body: any = channel === "telegram" ? { channel, ...tg }
-      : channel === "email" ? { channel, ...mail }
-      : { channel: "none" };
-    try { await api("/api/onboarding/notifications/save", { method: "POST", body: JSON.stringify(body) }); }
-    catch (e: any) { setError(e.message); }
+    setTested(null);
+    try {
+      const response = await api<{ ok: boolean; botName?: string; botUsername?: string }>("/api/onboarding/notifications/save", {
+        method: "POST",
+        body: JSON.stringify({ channel: "telegram", botToken: tg.botToken }),
+      });
+      setTelegramReady(true);
+      setPairing({
+        ok: true,
+        botName: response.botName,
+        botUsername: response.botUsername,
+        candidates: [],
+        pairedChatId: null,
+      });
+      setTg({ botToken: "" });
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveEmail = async () => {
+    await api("/api/onboarding/notifications/save", {
+      method: "POST",
+      body: JSON.stringify({ channel: "email", ...mail }),
+    });
+  };
+
+  const saveNone = async () => {
+    await api("/api/onboarding/notifications/save", {
+      method: "POST",
+      body: JSON.stringify({ channel: "none" }),
+    });
+  };
+
+  const approveCandidate = async (chatId: string) => {
+    setApprovingChatId(chatId);
+    setError(null);
+    setTested(null);
+    try {
+      await api("/api/onboarding/notifications/telegram/approve", {
+        method: "POST",
+        body: JSON.stringify({ chatId }),
+      });
+      const next = await api<TelegramPairingResponse>("/api/onboarding/notifications/telegram/pairing");
+      setPairing(next);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setApprovingChatId(null);
+    }
   };
 
   const test = async () => {
-    setError(null); setTested(null);
-    await save();
+    setTesting(true);
+    setError(null);
+    setTested(null);
     try {
-      const r = await api<{ ok: boolean; error?: string }>("/api/onboarding/notifications/test", { method: "POST" });
-      setTested(r.ok ? "✓ delivered" : `✗ ${r.error}`);
-    } catch (e: any) { setError(e.message); }
+      if (channel === "telegram" && !pairing?.pairedChatId) {
+        throw new Error("Approve a Telegram chat first.");
+      }
+      if (channel === "email") {
+        await saveEmail();
+      } else if (channel === "none") {
+        await saveNone();
+      }
+      const response = await api<{ ok: boolean; error?: string }>("/api/onboarding/notifications/test", { method: "POST" });
+      setTested(response.ok ? "delivered" : response.error || "delivery failed");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const finish = async () => {
+    setFinishing(true);
+    setError(null);
+    try {
+      if (channel === "telegram") {
+        if (!telegramReady) {
+          throw new Error("Save the Telegram bot token first.");
+        }
+        if (!pairing?.pairedChatId) {
+          throw new Error("Approve a Telegram chat before finishing setup.");
+        }
+      } else if (channel === "email") {
+        await saveEmail();
+      } else {
+        await saveNone();
+      }
+      await onAdvance();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setFinishing(false);
+    }
   };
 
   return (
@@ -34,12 +215,81 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
         <label><input type="radio" checked={channel === "email"} onChange={() => setChannel("email")} /> Email</label>
         <label><input type="radio" checked={channel === "none"} onChange={() => setChannel("none")} /> None</label>
       </div>
+
       {channel === "telegram" && (
         <div className="col">
-          <input placeholder="Bot token" value={tg.botToken} onChange={(e) => setTg({ ...tg, botToken: e.target.value })} />
-          <input placeholder="Chat ID" value={tg.chatId} onChange={(e) => setTg({ ...tg, chatId: e.target.value })} />
+          <div className="row" style={{ alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <input
+                placeholder="Bot token"
+                type="password"
+                value={tg.botToken}
+                onChange={(e) => setTg({ botToken: e.target.value })}
+              />
+            </div>
+            <button onClick={saveTelegramBotToken} disabled={saving || !tg.botToken.trim()}>
+              {saving ? "Saving..." : "Save bot token"}
+            </button>
+          </div>
+
+          {telegramReady && (
+            <div className="col" style={{ gap: 10 }}>
+              <div className="small muted">
+                {pairing?.botUsername
+                  ? <>Send a message to <code>@{pairing.botUsername}</code> in Telegram. This page will list chats that contact the bot.</>
+                  : <>Send a message to the bot in Telegram. This page will list chats that contact the bot.</>}
+              </div>
+
+              {pairing?.pairedChatId && (
+                <div className="badge ok">
+                  Paired with {pairedCandidate?.displayName || pairing.pairedChatId}
+                </div>
+              )}
+
+              <div className="col" style={{ gap: 8 }}>
+                {(pairing?.candidates || []).length === 0 && (
+                  <div className="small muted">Waiting for a Telegram message...</div>
+                )}
+                {(pairing?.candidates || []).map((candidate) => {
+                  const approved = candidate.chatId === pairing?.pairedChatId;
+                  return (
+                    <div
+                      key={candidate.chatId}
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        padding: 12,
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div className="col" style={{ gap: 4 }}>
+                        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                          <strong>{candidate.displayName}</strong>
+                          <span className="badge">{candidate.chatType}</span>
+                          {candidate.username && <span className="small muted">@{candidate.username}</span>}
+                        </div>
+                        {candidate.senderName && <div className="small muted">Sender: {candidate.senderName}</div>}
+                        {candidate.lastMessage && <div className="small muted">Latest: {candidate.lastMessage}</div>}
+                      </div>
+                      <button
+                        className={approved ? "primary" : ""}
+                        disabled={approved || approvingChatId === candidate.chatId}
+                        onClick={() => approveCandidate(candidate.chatId)}
+                      >
+                        {approved ? "Approved" : approvingChatId === candidate.chatId ? "Approving..." : "Approve"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
+
       {channel === "email" && (
         <div className="col">
           <input placeholder="From" value={mail.from} onChange={(e) => setMail({ ...mail, from: e.target.value })} />
@@ -50,11 +300,21 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
           <input placeholder="SMTP pass (optional)" type="password" value={mail.smtpPass} onChange={(e) => setMail({ ...mail, smtpPass: e.target.value })} />
         </div>
       )}
+
+      {channel === "none" && (
+        <div className="small muted">Notifications are disabled. You can configure them later in onboarding.</div>
+      )}
+
       <div className="row">
-        <button onClick={test}>Save & send test</button>
-        <button className="primary" onClick={async () => { await save(); await onAdvance(); }}>Finish setup</button>
+        <button onClick={test} disabled={testing || (channel === "telegram" && !pairing?.pairedChatId)}>
+          {testing ? "Sending..." : "Send test"}
+        </button>
+        <button className="primary" onClick={finish} disabled={finishing}>
+          {finishing ? "Finishing..." : "Finish setup"}
+        </button>
       </div>
-      {tested && <div className={tested.startsWith("✓") ? "badge ok" : "badge err"}>{tested}</div>}
+
+      {tested && <div className="badge ok">{tested}</div>}
       {error && <div className="badge err">{error}</div>}
     </div>
   );

@@ -1,7 +1,7 @@
 import { promises as dnsAsync } from "dns";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { writeFile, readFile, mkdir } from "fs/promises";
+import { writeFile, mkdir } from "fs/promises";
 import { dirname } from "path";
 
 import { Router, badRequest, forbidden } from "../http";
@@ -45,7 +45,10 @@ ${domain} {
   try {
     await writeFile(path, body, "utf-8");
   } catch (e: any) {
-    // In dev without /etc/caddy, fall back to a data-dir copy for tests.
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(`unable to write ${path}: ${e?.message || e}`);
+    }
+    // In local dev without /etc/caddy, fall back to a data-dir copy for tests.
     const fallback = `${config.dataDir}/Caddyfile.dev`;
     await mkdir(dirname(fallback), { recursive: true });
     await writeFile(fallback, body, "utf-8");
@@ -93,14 +96,13 @@ export function registerVpsSetupRoutes(router: Router) {
     // 1. Caddyfile
     await writeCaddyfile(domain, config.port);
 
-    // 2. Bring Caddy up (idempotent on re-run)
+    // 2. Bring Caddy up only if the config was written successfully.
     try {
       await sudoSystemctl("enable", "caddy");
-      await sudoSystemctl("start", "caddy");
-      await new Promise((r) => setTimeout(r, 3000));
-      await sudoSystemctl("reload", "caddy").catch(() => {});
+      await sudoSystemctl("restart", "caddy");
     } catch (e: any) {
-      log.warn(`caddy: systemctl failed (${e?.message || e}); continuing`);
+      log.warn(`caddy: systemctl failed (${e?.message || e})`);
+      throw new Error(`Caddy failed to apply ${domain}: ${e?.message || e}`);
     }
 
     // 3. Update our config with the public URL

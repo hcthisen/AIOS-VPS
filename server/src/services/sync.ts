@@ -8,19 +8,15 @@
 //
 // Commits as "aios: sync" so system-generated churn is separable from operator edits.
 
-import { readFile, writeFile, stat, mkdir, copyFile, readdir, access } from "fs/promises";
-import { constants as FS } from "fs";
+import { readFile, writeFile, stat, mkdir, copyFile, readdir } from "fs/promises";
 import { existsSync } from "fs";
-import { join, basename } from "path";
+import { join } from "path";
 
 import { config } from "../config";
 import { listDepartments } from "./departments";
 import { gitRun } from "./repo";
 import { log } from "../log";
-
-async function pathExists(p: string) {
-  try { await access(p, FS.F_OK); return true; } catch { return false; }
-}
+import { sendNotification } from "./notifications";
 
 async function writeIfChanged(path: string, content: string): Promise<boolean> {
   try {
@@ -123,6 +119,13 @@ export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }
       log.warn("sync: commit/push failed", e?.message || e);
     }
   }
+
+  if (out.conflicts.length) {
+    const lines = out.conflicts.map((c) => `- ${c.path}: ${c.message}`).join("\n");
+    await sendNotification(`AIOS sync detected conflicts and left files unchanged.\n${lines}`, "AIOS sync conflict")
+      .catch(() => {});
+  }
+
   return out;
 }
 
@@ -135,13 +138,7 @@ async function mirrorClaudeAgents(dir: string, out: SyncResult) {
   if (hasClaude && hasAgents) {
     const [a, b] = [await readFile(claude, "utf-8"), await readFile(agents, "utf-8")];
     if (a === b) return;
-    // Divergence: pick the most-recently-modified as source.
-    const [sa, sb] = [await stat(claude), await stat(agents)];
-    const source = sa.mtimeMs >= sb.mtimeMs ? claude : agents;
-    const target = source === claude ? agents : claude;
-    out.conflicts.push({ path: target, message: `divergent CLAUDE.md/AGENTS.md in ${dir}; took newer` });
-    await writeFile(target, await readFile(source, "utf-8"));
-    out.changed.push(target);
+    out.conflicts.push({ path: dir, message: "divergent CLAUDE.md and AGENTS.md; resolve manually before sync can proceed" });
   } else if (hasClaude) {
     await copyFile(claude, agents);
     out.changed.push(agents);

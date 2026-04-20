@@ -32,12 +32,13 @@ export class Router {
 
   add(method: string, path: string, handler: Handler) {
     const keys: string[] = [];
-    const pattern = new RegExp(
-      "^" + path.replace(/:([A-Za-z_]\w*)/g, (_, k) => {
+    const patternSource = path
+      .replace(/:([A-Za-z_]\w*)/g, (_, k) => {
         keys.push(k);
         return "([^/]+)";
-      }) + "/?$",
-    );
+      })
+      .replace(/\*/g, "(.*)");
+    const pattern = new RegExp(`^${patternSource}/?$`);
     this.routes.push({ method: method.toUpperCase(), pattern, keys, handler });
   }
 

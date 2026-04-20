@@ -41,13 +41,17 @@ export function App() {
 
   useEffect(() => {
     if (!me) return;
-    // Route by setup phase when the user visits root.
     if (!me.user) {
       if (path !== "/auth") navigate("/auth");
       return;
     }
-    if (me.setupPhase !== "complete" && path === "/") {
-      navigate(setupPhaseToRoute(me.setupPhase));
+    if (me.setupPhase !== "complete") {
+      const target = setupPhaseToRoute(me.setupPhase);
+      if (path !== target) navigate(target);
+      return;
+    }
+    if (path === "/auth" || path.startsWith("/setup/")) {
+      navigate("/");
     }
   }, [me, path]);
 
@@ -117,7 +121,7 @@ function SetupLayout({ me, onAdvance, navigate, path }: { me: Me; onAdvance: () 
           <div key={s[0]} className={`step ${i < activeIdx ? "done" : ""} ${i === activeIdx ? "active" : ""}`}>{s[1]}</div>
         ))}
       </div>
-      {page === "domain" && <VpsDomainSetup onAdvance={async () => { await onAdvance(); }} />}
+      {page === "domain" && <VpsDomainSetup onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "domain_setup") navigate("/setup/providers"); }} />}
       {page === "providers" && <ProviderAuth onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "provider_setup") navigate("/setup/github"); }} />}
       {page === "github" && <GithubSetup onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "github_setup") navigate("/setup/repo"); }} />}
       {page === "repo" && <RepoSetup onAdvance={async () => { const m = await onAdvance(); if (m.setupPhase !== "repo_setup") navigate("/setup/notifications"); }} />}

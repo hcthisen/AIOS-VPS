@@ -3,7 +3,7 @@
 import cronParser from "cron-parser";
 import { db } from "../db";
 import { log } from "../log";
-import { pullRepo, repoHead } from "./repo";
+import { pullRepo } from "./repo";
 import { listCronTasks, listGoals } from "./departments";
 import { startRun, isGlobalPaused } from "./executor";
 import { runSyncLayer } from "./sync";
@@ -55,10 +55,7 @@ export async function runHeartbeatTick() {
     log.warn("heartbeat: pull failed:", pull.error);
     return;
   }
-  if (pull.changed) {
-    // After any pull, run the sync layer.
-    await runSyncLayer().catch((e) => log.warn("sync after pull failed", e?.message || e));
-  }
+  await runSyncLayer().catch((e) => log.warn("sync after pull failed", e?.message || e));
 
   const now = Date.now();
 

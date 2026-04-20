@@ -7,14 +7,16 @@ import { existsSync } from "fs";
 import { join } from "path";
 
 import { config } from "../config";
+import { db } from "../db";
 import { log } from "../log";
 import {
-  buildAnthropicAuthEnv, buildOpenAiAuthEnv, buildCommonAuthEnv,
+  buildAnthropicAuthEnv, buildOpenAiAuthEnv,
   anthropicAuthDetected, codexAuthDetected,
 } from "./provider-auth";
 import { Run, createRun, updateRun, runEvents, popBacklog, enqueueBacklog, getRun } from "./runs";
 import { claimDepartments, releaseClaimsForRun, expireStaleClaims } from "./claims";
-import { pullRepo, gitRun } from "./repo";
+import { gitRun } from "./repo";
+import { runSyncLayer } from "./sync";
 
 export type Provider = "claude-code" | "codex";
 
@@ -143,11 +145,16 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
 
   let commitSha: string | null = null;
   if (code === 0 && req.commitOnSuccess !== false) {
+    await runSyncLayer({ commit: false }).catch((e) => {
+      log.warn("sync after run failed", runId, e?.message || e);
+    });
     commitSha = await tryCommitAndPush(runId, depts[0], req.trigger).catch((e) => {
       log.warn("commit/push failed", runId, e?.message || e);
       return null;
     });
   }
+
+  await recordUsage(runId, depts[0], provider, logPath);
 
   const killed = signal === "SIGTERM" || signal === "SIGKILL";
   const status = killed ? "killed" : code === 0 ? "succeeded" : "failed";
@@ -211,4 +218,63 @@ export function killRun(runId: string): boolean {
   return true;
 }
 
+export function killAllRuns(): number {
+  const runIds = [...activeProcesses.keys()];
+  for (const runId of runIds) killRun(runId);
+  return runIds.length;
+}
+
 export function activeProcessCount() { return activeProcesses.size; }
+
+async function recordUsage(runId: string, department: string, provider: Provider, logPath: string) {
+  const raw = await readFile(logPath, "utf-8").catch(() => "");
+  const usage = parseUsage(raw);
+  db.prepare(`
+    INSERT INTO usage(run_id, department, provider, tokens_in, tokens_out, cost_usd, recorded_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    runId,
+    department,
+    provider,
+    usage.tokensIn,
+    usage.tokensOut,
+    usage.costUsd,
+    Date.now(),
+  );
+}
+
+function parseUsage(text: string): { tokensIn: number | null; tokensOut: number | null; costUsd: number | null } {
+  const tokensIn = lastNumberMatch(text, [
+    /(?:input|prompt)[ _-]?tokens["':=\s]+(\d+)/gi,
+    /tokens[_-]?in["':=\s]+(\d+)/gi,
+  ]);
+  const tokensOut = lastNumberMatch(text, [
+    /(?:output|completion)[ _-]?tokens["':=\s]+(\d+)/gi,
+    /tokens[_-]?out["':=\s]+(\d+)/gi,
+  ]);
+  const costUsd = lastDecimalMatch(text, [
+    /(?:estimated|total)?\s*cost(?:_usd)?["':=\s$]+([0-9]+(?:\.[0-9]+)?)/gi,
+    /cost[_-]?usd["':=\s]+([0-9]+(?:\.[0-9]+)?)/gi,
+  ]);
+  return { tokensIn, tokensOut, costUsd };
+}
+
+function lastNumberMatch(text: string, patterns: RegExp[]): number | null {
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    let last: number | null = null;
+    while ((match = pattern.exec(text))) last = Number(match[1]);
+    if (last !== null && Number.isFinite(last)) return last;
+  }
+  return null;
+}
+
+function lastDecimalMatch(text: string, patterns: RegExp[]): number | null {
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    let last: number | null = null;
+    while ((match = pattern.exec(text))) last = Number(match[1]);
+    if (last !== null && Number.isFinite(last)) return last;
+  }
+  return null;
+}

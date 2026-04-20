@@ -4,9 +4,9 @@ import { api } from "../api";
 export function AuthPage({ onAuthed, firstRun, setupPhase }: { onAuthed: () => void; firstRun: boolean; setupPhase: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"login" | "signup">(firstRun ? "signup" : "login");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const mode: "login" | "signup" = firstRun ? "signup" : "login";
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,7 +22,7 @@ export function AuthPage({ onAuthed, firstRun, setupPhase }: { onAuthed: () => v
     <div className="auth-wrap">
       <div className="auth-card card col">
         <h2 style={{ margin: 0 }}>
-          {firstRun ? "Create first admin" : mode === "signup" ? "Sign up" : "Log in"}
+          {firstRun ? "Create first admin" : "Log in"}
         </h2>
         <p className="small muted">Setup phase: <code>{setupPhase}</code></p>
         <form onSubmit={submit} className="col">
@@ -33,11 +33,6 @@ export function AuthPage({ onAuthed, firstRun, setupPhase }: { onAuthed: () => v
             {busy ? "…" : mode === "signup" ? "Create admin" : "Log in"}
           </button>
         </form>
-        {!firstRun && (
-          <a onClick={() => setMode(mode === "login" ? "signup" : "login")} className="small">
-            {mode === "login" ? "Create another account" : "Log in instead"}
-          </a>
-        )}
       </div>
     </div>
   );

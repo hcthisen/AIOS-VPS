@@ -1,24 +1,17 @@
-// Provider-auth service: Anthropic OAuth PKCE + OpenAI Codex device-auth.
-// Module-scoped singletons enforce "one Anthropic + one OpenAI session at a time".
-//
-// Credential ground truth lives on disk:
-//   ~/.claude/.credentials.json   (Claude Code)
-//   ~/.codex/auth.json            (Codex)
-// Never cache auth state — re-check on every poll.
-
-import { randomBytes, createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { spawn, spawnSync, ChildProcess } from "child_process";
-import { stat, readFile } from "fs/promises";
+import { stat, readFile, mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 
 import { log } from "../log";
 
-// ---------- Constants (don't re-derive) ----------
-export const ANTHROPIC_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
-export const ANTHROPIC_OAUTH_TOKEN_URL     = "https://platform.claude.com/v1/oauth/token";
-export const ANTHROPIC_OAUTH_MANUAL_REDIRECT_URL = "https://platform.claude.com/oauth/code/callback";
-export const ANTHROPIC_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-export const ANTHROPIC_OAUTH_SCOPES = [
+export const DEVICE_CODE_TTL_MS = 15 * 60 * 1000;
+
+const ANTHROPIC_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
+const ANTHROPIC_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const ANTHROPIC_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const ANTHROPIC_OAUTH_MANUAL_REDIRECT_URL = "https://platform.claude.com/oauth/code/callback";
+const ANTHROPIC_OAUTH_SCOPES = [
   "org:create_api_key",
   "user:profile",
   "user:inference",
@@ -26,10 +19,6 @@ export const ANTHROPIC_OAUTH_SCOPES = [
   "user:mcp_servers",
   "user:file_upload",
 ];
-
-export const DEVICE_CODE_TTL_MS = 15 * 60 * 1000;
-
-// ---------- Env builders (shared by Phase 3 + Phase 6) ----------
 
 export function getAgentHomeDir(): string {
   return process.env.AIOS_HOME
@@ -74,63 +63,45 @@ export function buildOpenAiAuthEnv(): NodeJS.ProcessEnv {
   };
 }
 
-// ---------- Detection by file existence ----------
-
 async function pathExists(p: string): Promise<boolean> {
-  try { await stat(p); return true; } catch { return false; }
-}
-
-export async function anthropicAuthDetected(): Promise<boolean> {
-  const home = getAgentHomeDir();
-  if (await pathExists(join(home, ".claude", ".credentials.json"))) return true;
-  const legacy = join(home, ".claude.json");
-  if (await pathExists(legacy)) {
-    try {
-      const c = JSON.parse(await readFile(legacy, "utf-8"));
-      if (c.oauthAccount || c.sessionKey || c.apiKey) return true;
-    } catch {}
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
-export async function codexAuthDetected(): Promise<boolean> {
-  return pathExists(join(getAgentHomeDir(), ".codex", "auth.json"));
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-// ---------- Anthropic OAuth PKCE ----------
-
-export interface AnthropicSnapshot {
-  loggedIn: boolean;
-  email?: string;
-  organizationName?: string;
-  subscriptionType?: string;
+function encodeBase64Url(value: Buffer): string {
+  return value.toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
-interface AnthropicSession {
-  id: string;
-  codeVerifier: string;
-  state: string;
-  verificationUrl: string;
-  createdAt: number;
-  status: "waiting" | "complete" | "failed" | "canceled";
-  error?: string;
-  snapshot?: AnthropicSnapshot;
+function generateCodeVerifier(): string {
+  return encodeBase64Url(randomBytes(32));
 }
 
-let anthropicSession: AnthropicSession | null = null;
-
-export function getAnthropicSession(): Omit<AnthropicSession, "codeVerifier" | "state"> | null {
-  if (!anthropicSession) return null;
-  const { codeVerifier: _v, state: _s, ...safe } = anthropicSession;
-  return safe;
+function generateOAuthState(): string {
+  return encodeBase64Url(randomBytes(32));
 }
 
-function generateCodeVerifier() { return randomBytes(32).toString("base64url"); }
-function createCodeChallenge(v: string) {
-  return createHash("sha256").update(v).digest().toString("base64url");
+function createCodeChallenge(codeVerifier: string): string {
+  return encodeBase64Url(createHash("sha256").update(codeVerifier).digest());
 }
 
-function buildVerificationUrl(codeVerifier: string, state: string): string {
+function parseScopeList(value: unknown): string[] {
+  return typeof value === "string"
+    ? value.split(/\s+/).map((part) => part.trim()).filter(Boolean)
+    : [];
+}
+
+function buildAnthropicVerificationUrl(codeVerifier: string, state: string): string {
   const url = new URL(ANTHROPIC_OAUTH_AUTHORIZE_URL);
   url.searchParams.set("code", "true");
   url.searchParams.set("client_id", ANTHROPIC_OAUTH_CLIENT_ID);
@@ -143,26 +114,87 @@ function buildVerificationUrl(codeVerifier: string, state: string): string {
   return url.toString();
 }
 
-export function startAnthropicSession(): { sessionId: string; verificationUrl: string; status: "waiting" } {
-  if (anthropicSession && anthropicSession.status === "waiting") {
-    throw new Error("an Anthropic auth session is already in progress");
+function parseAnthropicCallback(value: string): { code: string; state: string } | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const url = new URL(trimmed);
+      const code = url.searchParams.get("code")?.trim();
+      const state = url.searchParams.get("state")?.trim();
+      if (code && state) return { code, state };
+    } catch {}
   }
-  const codeVerifier = generateCodeVerifier();
-  const state = randomBytes(24).toString("base64url");
-  const verificationUrl = buildVerificationUrl(codeVerifier, state);
-  anthropicSession = {
-    id: randomBytes(12).toString("base64url"),
-    codeVerifier, state, verificationUrl,
-    createdAt: Date.now(),
-    status: "waiting",
-  };
-  return { sessionId: anthropicSession.id, verificationUrl, status: "waiting" };
+  const match = trimmed.match(/^([A-Za-z0-9_-]+)#([A-Za-z0-9_-]+)$/);
+  return match ? { code: match[1], state: match[2] } : null;
 }
 
-async function exchangeAuthorizationCode(input: {
-  authorizationCode: string; codeVerifier: string; state: string;
+async function ensureAnthropicConfigFiles(): Promise<void> {
+  const home = getAgentHomeDir();
+  const claudeDir = join(home, ".claude");
+  const legacyPath = join(home, ".claude.json");
+  const nestedLegacyPath = join(claudeDir, ".claude.json");
+
+  await mkdir(claudeDir, { recursive: true });
+  if (!(await pathExists(legacyPath))) {
+    await writeFile(legacyPath, "{}\n", "utf-8");
+  }
+  if (!(await pathExists(nestedLegacyPath))) {
+    await writeFile(nestedLegacyPath, "{}\n", "utf-8");
+  }
+}
+
+export async function anthropicAuthDetected(): Promise<boolean> {
+  const home = getAgentHomeDir();
+  const credentialsPath = join(home, ".claude", ".credentials.json");
+  if (await pathExists(credentialsPath)) return true;
+
+  const legacyPath = join(home, ".claude.json");
+  if (await pathExists(legacyPath)) {
+    try {
+      const content = JSON.parse(await readFile(legacyPath, "utf-8"));
+      if (content.oauthAccount || content.sessionKey || content.apiKey) return true;
+    } catch {}
+  }
+  return false;
+}
+
+export async function codexAuthDetected(): Promise<boolean> {
+  return pathExists(join(getAgentHomeDir(), ".codex", "auth.json"));
+}
+
+export interface AnthropicSnapshot {
+  loggedIn: boolean;
+  email?: string;
+  organizationName?: string;
+  subscriptionType?: string;
+}
+
+interface AnthropicSession {
+  id: string;
+  codeVerifier: string;
+  oauthState: string;
+  verificationUrl: string;
+  createdAt: number;
+  status: "waiting" | "complete" | "failed" | "canceled";
+  error?: string;
+  snapshot?: AnthropicSnapshot;
+}
+
+let anthropicSession: AnthropicSession | null = null;
+
+export function getAnthropicSession(): Omit<AnthropicSession, "codeVerifier" | "oauthState"> | null {
+  if (!anthropicSession) return null;
+  const { codeVerifier: _codeVerifier, oauthState: _oauthState, ...safe } = anthropicSession;
+  return safe;
+}
+
+async function exchangeAnthropicAuthorizationCode(input: {
+  authorizationCode: string;
+  codeVerifier: string;
+  state: string;
 }): Promise<Record<string, unknown>> {
-  const r = await fetch(ANTHROPIC_OAUTH_TOKEN_URL, {
+  const response = await fetch(ANTHROPIC_OAUTH_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -174,50 +206,74 @@ async function exchangeAuthorizationCode(input: {
       state: input.state,
     }),
   });
-  if (!r.ok) {
-    const text = await r.text().catch(() => "");
-    // Redact any token-looking fragment before surfacing.
-    throw new Error(`token exchange failed (${r.status}): ${text.slice(0, 200)}`);
+
+  if (response.ok) {
+    return await response.json() as Record<string, unknown>;
   }
-  return await r.json() as Record<string, unknown>;
+
+  const detail = (await response.text()).trim();
+  throw new Error(
+    detail
+      ? `Claude token exchange failed (${response.status}): ${detail}`
+      : `Claude token exchange failed (${response.status}).`,
+  );
 }
 
-function installRefreshToken(refreshToken: string): { ok: boolean; stderr?: string } {
-  const r = spawnSync("claude", ["auth", "login"], {
+function installAnthropicRefreshToken(refreshToken: string, scopes: string[]): void {
+  const result = spawnSync("claude", ["auth", "login"], {
     cwd: getAgentHomeDir(),
     encoding: "utf8",
     env: {
       ...buildAnthropicAuthEnv(),
       CLAUDE_CODE_OAUTH_REFRESH_TOKEN: refreshToken,
+      CLAUDE_CODE_OAUTH_SCOPES: scopes.join(" "),
     },
+    timeout: 15000,
   });
-  if (r.error) return { ok: false, stderr: String(r.error.message) };
-  if (r.status !== 0) return { ok: false, stderr: r.stderr };
-  return { ok: true };
+
+  if (result.status === 0) return;
+
+  const detail = [
+    String(result.error?.message || "").trim(),
+    String(result.stderr || "").trim(),
+    String(result.stdout || "").trim(),
+  ].filter(Boolean).join("\n");
+  throw new Error(
+    detail
+      ? `Claude credential install failed: ${detail}`
+      : `Claude credential install failed with code ${result.status ?? "unknown"}.`,
+  );
 }
 
-/**
- * Accept either a raw `code#state` string or a full redirect URL pasted back
- * from the Anthropic manual-redirect page.
- */
-function parsePastedCode(raw: string): { code: string; state: string } {
-  const trimmed = raw.trim();
-  let code = trimmed;
-  let state = "";
-  // Support the redirect URL case.
-  try {
-    const u = new URL(trimmed);
-    const qCode = u.searchParams.get("code");
-    const qState = u.searchParams.get("state");
-    if (qCode) code = qCode;
-    if (qState) state = qState;
-  } catch {}
-  if (!state && code.includes("#")) {
-    const [c, s] = code.split("#");
-    code = c; state = s;
+export async function startAnthropicSession(): Promise<{
+  id: string;
+  verificationUrl: string;
+  status: AnthropicSession["status"];
+  error?: string;
+}> {
+  if (anthropicSession && anthropicSession.status === "waiting") {
+    throw new Error("an Anthropic auth session is already in progress");
   }
-  if (!code || !state) throw new Error("paste must contain both code and state");
-  return { code, state };
+
+  await ensureAnthropicConfigFiles();
+
+  const session: AnthropicSession = {
+    id: randomBytes(12).toString("base64url"),
+    codeVerifier: generateCodeVerifier(),
+    oauthState: generateOAuthState(),
+    verificationUrl: "",
+    createdAt: Date.now(),
+    status: "waiting",
+  };
+  session.verificationUrl = buildAnthropicVerificationUrl(session.codeVerifier, session.oauthState);
+  anthropicSession = session;
+
+  return {
+    id: session.id,
+    verificationUrl: session.verificationUrl,
+    status: session.status,
+    error: session.error,
+  };
 }
 
 export async function submitAnthropicCode(raw: string): Promise<{
@@ -229,31 +285,44 @@ export async function submitAnthropicCode(raw: string): Promise<{
   if (anthropicSession.status !== "waiting") {
     throw new Error(`Anthropic session is ${anthropicSession.status}`);
   }
+
+  const payload = parseAnthropicCallback(raw);
+  if (!payload) {
+    throw new Error("Paste the Claude callback URL or the full code#state value.");
+  }
+  if (payload.state !== anthropicSession.oauthState) {
+    anthropicSession.status = "failed";
+    anthropicSession.error = "This callback belongs to a different sign-in attempt. Start again.";
+    return { status: "failed", error: anthropicSession.error };
+  }
+
   try {
-    const { code, state } = parsePastedCode(raw);
-    if (state !== anthropicSession.state) throw new Error("state mismatch");
-    const token = await exchangeAuthorizationCode({
-      authorizationCode: code,
+    const tokenResponse = await exchangeAnthropicAuthorizationCode({
+      authorizationCode: payload.code,
       codeVerifier: anthropicSession.codeVerifier,
-      state,
+      state: anthropicSession.oauthState,
     });
-    const refresh = token["refresh_token"];
-    if (typeof refresh !== "string") throw new Error("no refresh_token in response");
-    const inst = installRefreshToken(refresh);
-    if (!inst.ok) {
-      log.warn("claude auth login failed; continuing if credentials file was still written:", inst.stderr?.slice(0, 200));
+    const refreshToken = optionalString(tokenResponse.refresh_token);
+    if (!refreshToken) {
+      throw new Error("Token exchange did not return a refresh token.");
     }
-    // Ground truth: file must exist.
-    const ok = await anthropicAuthDetected();
-    if (!ok) throw new Error("credentials file not written");
+
+    const scopes = parseScopeList(tokenResponse.scope);
+    installAnthropicRefreshToken(refreshToken, scopes.length ? scopes : ANTHROPIC_OAUTH_SCOPES);
+
     const snapshot = await readAnthropicSnapshot();
+    if (!snapshot.loggedIn) {
+      throw new Error("Login finished without persisting credentials.");
+    }
+
     anthropicSession.status = "complete";
+    anthropicSession.error = undefined;
     anthropicSession.snapshot = snapshot;
     return { status: "complete", snapshot };
   } catch (e: any) {
-    anthropicSession!.status = "failed";
-    anthropicSession!.error = String(e?.message || e);
-    return { status: "failed", error: anthropicSession!.error };
+    anthropicSession.status = "failed";
+    anthropicSession.error = String(e?.message || e);
+    return { status: "failed", error: anthropicSession.error };
   }
 }
 
@@ -265,7 +334,6 @@ export function cancelAnthropicSession() {
 }
 
 export async function readAnthropicSnapshot(): Promise<AnthropicSnapshot> {
-  // Optional richer snapshot via `claude auth status --json`. Best-effort.
   try {
     const r = spawnSync("claude", ["auth", "status", "--json"], {
       cwd: getAgentHomeDir(),
@@ -288,10 +356,27 @@ export async function readAnthropicSnapshot(): Promise<AnthropicSnapshot> {
   return { loggedIn: await anthropicAuthDetected() };
 }
 
-// ---------- OpenAI Codex device-auth ----------
-
 export function stripAnsi(s: string): string {
   return s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function extractOpenAiVerificationUrl(text: string): string | null {
+  const match = text.match(/https:\/\/(?:auth\.openai\.com|chatgpt\.com)[^\s]+/);
+  return match ? match[0] : null;
+}
+
+function extractOpenAiUserCode(text: string): string | null {
+  const patterns = [
+    /\b([A-Z0-9]{4}-[A-Z0-9]{5})\b/,
+    /\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/,
+    /\b([A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3})\b/,
+    /\b([A-Z0-9]{9})\b/,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 interface OpenAiSession {
@@ -348,15 +433,18 @@ export async function startOpenAiDeviceAuth(): Promise<Omit<OpenAiSession, "chil
     const text = stripAnsi(buf.toString("utf-8"));
     session.stdoutTail.push(text);
     if (session.stdoutTail.length > 50) session.stdoutTail.shift();
-    const urlMatch = text.match(/https:\/\/(auth\.openai\.com|chatgpt\.com)[^\s]+/);
-    if (urlMatch && !session.verificationUrl) session.verificationUrl = urlMatch[0];
-    const codeMatch = text.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/);
-    if (codeMatch && !session.userCode) session.userCode = codeMatch[1];
+    const combined = stripAnsi(session.stdoutTail.join("\n"));
+    if (!session.verificationUrl) session.verificationUrl = extractOpenAiVerificationUrl(combined);
+    if (!session.userCode) session.userCode = extractOpenAiUserCode(combined);
   };
-  session.child!.stdout?.on("data", onData);
-  session.child!.stderr?.on("data", onData);
+  session.child.stdout?.on("data", onData);
+  session.child.stderr?.on("data", onData);
 
-  session.child!.on("exit", async (code) => {
+  session.child.on("exit", async (code) => {
+    if (openAiTtlTimer) {
+      clearTimeout(openAiTtlTimer);
+      openAiTtlTimer = null;
+    }
     const detected = await codexAuthDetected();
     if (session.status === "waiting") {
       if (detected && (code === 0 || code === null)) {
@@ -374,7 +462,6 @@ export async function startOpenAiDeviceAuth(): Promise<Omit<OpenAiSession, "chil
   }, DEVICE_CODE_TTL_MS);
 
   openAiSession = session;
-  // Wait up to 5s for the child to emit both fields before returning.
   const start = Date.now();
   while (Date.now() - start < 5000) {
     if (session.userCode && session.verificationUrl) break;
@@ -394,5 +481,8 @@ export function cancelOpenAiSession(reason = "canceled") {
     openAiSession.status = reason === "canceled" ? "canceled" : "failed";
     if (reason !== "canceled") openAiSession.error = reason;
   }
-  if (openAiTtlTimer) { clearTimeout(openAiTtlTimer); openAiTtlTimer = null; }
+  if (openAiTtlTimer) {
+    clearTimeout(openAiTtlTimer);
+    openAiTtlTimer = null;
+  }
 }

@@ -15,7 +15,7 @@ export function registerProviderAuthRoutes(router: Router) {
   router.post("/api/provider-auth/anthropic/start", async (req, res) => {
     await guard(req, res);
     try {
-      const s = startAnthropicSession();
+      const s = await startAnthropicSession();
       res.json(s);
     } catch (e: any) { res.error(409, String(e?.message || e)); }
   });
@@ -26,7 +26,7 @@ export function registerProviderAuthRoutes(router: Router) {
     if (!raw) throw badRequest("code required");
     const out = await submitAnthropicCode(raw);
     if (out.status === "complete") {
-      maybeAdvanceProviderPhase();
+      await maybeAdvanceProviderPhase();
     }
     res.json({ ...out, setupPhase: getSetupPhase() });
   });
@@ -68,12 +68,8 @@ export function registerProviderAuthRoutes(router: Router) {
     await guard(req, res);
     const session = getOpenAiSession();
     const detected = await codexAuthDetected();
-    if (detected && session?.status === "waiting") {
-      // file appeared via another path; treat as complete
-      (session as any).status = "complete";
-    }
     if (session?.status === "complete" || (detected && !session)) {
-      maybeAdvanceProviderPhase();
+      await maybeAdvanceProviderPhase();
     }
     res.json({ session, detected, setupPhase: getSetupPhase() });
   });
@@ -85,6 +81,9 @@ export function registerProviderAuthRoutes(router: Router) {
       anthropicAuthDetected(),
       codexAuthDetected(),
     ]);
+    if ((anthropic || openai) && getSetupPhase() === "provider_setup") {
+      await maybeAdvanceProviderPhase();
+    }
     res.json({
       anthropic: { detected: anthropic, session: getAnthropicSession() },
       openai: { detected: openai, session: getOpenAiSession() },

@@ -1,85 +1,97 @@
 ---
 title: Claude Code + Codex CLI Onboarding
-summary: Portable recipe for installing the Claude Code and Codex CLIs on a VPS during bootstrap, then letting an admin sign in with their Claude.ai and ChatGPT subscriptions from a dashboard UI.
+summary: Portable recipe for installing Claude Code and Codex on a VPS, then onboarding both from a dashboard in a way that survives real production use.
 ---
 
-This guide describes the pattern Paperclip uses to (1) install the Claude Code and OpenAI Codex CLIs on a fresh VPS and (2) let a logged-in admin bind their Claude subscription (OAuth PKCE) and their ChatGPT subscription (OpenAI device-auth) to the server from a dashboard page. Both CLIs then run as the app user, reading credentials from disk.
+This is the working pattern from this repo after debugging a real VPS onboarding flow. It covers bootstrap install, server-side auth orchestration, and the frontend behavior needed to make both providers usable from a setup wizard.
 
 Reference implementation in this repo:
 
-- Installer: `scripts/vps-bootstrap.sh` (Phase 8, `install_cli_tools()`)
+- Installer: `scripts/vps-bootstrap.sh`
 - Server auth logic: `server/src/services/provider-auth.ts`
 - Server endpoints: `server/src/routes/provider-auth.ts`
-- Frontend page: `ui/src/pages/ProviderAuth.tsx` (route `/setup/providers`)
-- Credential paths: `~/.claude/.credentials.json`, `~/.codex/auth.json`
+- Frontend page: `ui/src/pages/ProviderAuth.tsx`
 
----
+## What actually works
 
-## Design principles
+1. Install both CLIs during bootstrap, not during onboarding.
+2. Store credentials only in the app user's home directory.
+3. Use Claude Code with OAuth PKCE plus `claude auth login` fed by env vars.
+4. Use Codex with `codex login --device-auth`.
+5. Detect auth by files on disk, not by a database flag.
 
-1. **CLIs are installed once, at bootstrap, as the unprivileged app user.** No per-session install. Claude Code goes into `~/.local/bin`, Codex is installed globally via npm.
-2. **Credentials live on disk under the app user's home.** Not in the database, not in env vars. Both CLIs already know how to find them, so any subprocess we spawn inherits auth for free.
-3. **The dashboard never handles raw passwords or API keys.** Claude Code uses an OAuth PKCE round-trip; Codex uses OpenAI's device-auth flow. The user authenticates against the vendor; we just receive the token the CLI writes to disk.
-4. **Auth state is detected by file existence, not a DB flag.** Server checks `~/.claude/.credentials.json` and `~/.codex/auth.json` on each poll. That keeps the dashboard honest even if a sibling process logged in or out.
+The most important lesson: do not drive Claude Code by spawning a terminal and pasting the `code#state` back into the CLI. That was brittle in practice. The stable flow is PKCE on the server, token exchange on the server, then let `claude auth login` write credentials itself.
 
----
+## Part 1 - Bootstrap install
 
-## Part 1 — Bootstrap-time CLI install
-
-Runs as root during VPS bootstrap, with an app user named here `myapp`.
+Run as root. Install Claude as the app user, install Codex globally, and make sure the app user's home is the same home your server later exports via systemd.
 
 ```bash
 APP_USER="myapp"
 APP_HOME="/home/${APP_USER}"
 
-# 1. Create config dirs and fix ownership
-mkdir -p "${APP_HOME}/.claude" "${APP_HOME}/.codex"
-# Seed an empty legacy file; some Claude Code versions require it to exist
-[[ -f "${APP_HOME}/.claude.json" ]] || printf '{}\n' > "${APP_HOME}/.claude.json"
-chmod 600 "${APP_HOME}/.claude.json"
-chown -R "${APP_USER}":"${APP_USER}" \
-  "${APP_HOME}/.claude" "${APP_HOME}/.codex" "${APP_HOME}/.claude.json"
+run_as_app_home() {
+  local command="$1"
+  sudo -u "${APP_USER}" env HOME="${APP_HOME}" USERPROFILE="${APP_HOME}" bash -c \
+    "export HOME='${APP_HOME}' USERPROFILE='${APP_HOME}' PATH=\"\$HOME/.local/bin:\$PATH\"; ${command}"
+}
 
-# 2. Put ~/.local/bin on PATH for the app user
-if ! grep -q '.local/bin' "${APP_HOME}/.bashrc" 2>/dev/null; then
+mkdir -p "${APP_HOME}/.claude" "${APP_HOME}/.codex"
+[[ -f "${APP_HOME}/.claude.json" ]] || printf '{}\n' > "${APP_HOME}/.claude.json"
+[[ -f "${APP_HOME}/.claude/.claude.json" ]] || cp "${APP_HOME}/.claude.json" "${APP_HOME}/.claude/.claude.json"
+chown -R "${APP_USER}:${APP_USER}" "${APP_HOME}/.claude" "${APP_HOME}/.codex" "${APP_HOME}/.claude.json"
+chmod 600 "${APP_HOME}/.claude.json" "${APP_HOME}/.claude/.claude.json"
+
+if ! grep -qs '.local/bin' "${APP_HOME}/.bashrc"; then
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "${APP_HOME}/.bashrc"
-  chown "${APP_USER}":"${APP_USER}" "${APP_HOME}/.bashrc"
+  chown "${APP_USER}:${APP_USER}" "${APP_HOME}/.bashrc"
 fi
 
-# 3. Claude Code — per-user install via the official installer
-sudo -u "${APP_USER}" bash -lc \
-  'export PATH="$HOME/.local/bin:$PATH" && curl -fsSL https://claude.ai/install.sh | bash'
+if ! run_as_app_home 'command -v claude' >/dev/null 2>&1; then
+  run_as_app_home 'set -o pipefail && curl -fsSL https://claude.ai/install.sh | bash' || true
+  if ! run_as_app_home 'command -v claude' >/dev/null 2>&1; then
+    run_as_app_home 'npm install --global --prefix "$HOME/.local" @anthropic-ai/claude-code@latest'
+  fi
+fi
 
-# 4. Codex — global npm install (goes to /usr/lib/node_modules, root runs it)
-npm install --global @openai/codex@latest
+if ! command -v codex >/dev/null 2>&1; then
+  npm install --global --silent @openai/codex@latest
+fi
 ```
 
-After this, `sudo -u myapp bash -lc 'command -v claude && command -v codex'` should print both paths.
+Notes from production:
 
-### systemd environment contract
+- Use `bash -c`, not `bash -lc`, in the helper. The login shell reset `HOME` and `PATH` in ways that broke Claude install.
+- Seed both `~/.claude.json` and `~/.claude/.claude.json`. Some Claude versions expect both to exist.
+- Verify install with:
 
-When you launch the server under systemd, make sure the unit exports the same PATH and HOME the CLIs expect:
+```bash
+sudo -u "${APP_USER}" env HOME="${APP_HOME}" USERPROFILE="${APP_HOME}" PATH="${APP_HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+  bash -c 'command -v claude && claude --version && command -v codex && codex --version'
+```
+
+## Part 2 - systemd environment contract
+
+Your app service must export the same home and path the CLIs use.
 
 ```ini
-# /etc/systemd/system/myapp.service (excerpt)
 [Service]
 User=myapp
 Environment=HOME=/home/myapp
+Environment=USERPROFILE=/home/myapp
 Environment=PATH=/home/myapp/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CLAUDE_CONFIG_DIR=/home/myapp/.claude
+Environment=CLAUDE_CREDENTIALS_PATH=/home/myapp/.claude/.credentials.json
+Environment=CODEX_HOME=/home/myapp/.codex
 ```
 
-The server uses these to build the child-process environment when it later spawns `claude` / `codex`.
+## Part 3 - Shared env helpers in the server
 
----
-
-## Part 2 — Environment helpers (server-side)
-
-Every subprocess call uses the same curated env so the CLIs find their own config regardless of how the parent process was started.
+Every subprocess should inherit a clean auth env:
 
 ```ts
-// server/src/services/provider-auth.ts
 function getAgentHomeDir(): string {
-  return process.env.HOME || process.env.USERPROFILE || "/home/myapp";
+  return process.env.AIOS_HOME || process.env.HOME || process.env.USERPROFILE || "/home/myapp";
 }
 
 function buildCommonAuthEnv(): NodeJS.ProcessEnv {
@@ -88,54 +100,28 @@ function buildCommonAuthEnv(): NodeJS.ProcessEnv {
     ...process.env,
     HOME: home,
     USERPROFILE: home,
-    PATH: [
-      join(home, ".local", "bin"),
-      "/usr/local/bin",
-      "/usr/bin",
-      process.env.PATH || "",
-    ].join(":"),
+    PATH: [join(home, ".local", "bin"), "/usr/local/bin", "/usr/bin", "/bin", process.env.PATH || ""]
+      .filter(Boolean).join(":"),
     FORCE_COLOR: "0",
     NO_COLOR: "1",
-    TERM: "dumb", // keep ANSI sequences out of parsed output
+    TERM: "dumb",
   };
-}
-
-function buildAnthropicAuthEnv() {
-  const home = getAgentHomeDir();
-  return {
-    ...buildCommonAuthEnv(),
-    CLAUDE_CONFIG_DIR: join(home, ".claude"),
-    CLAUDE_CREDENTIALS_PATH: join(home, ".claude", ".credentials.json"),
-    CLAUDE_LEGACY_CREDENTIALS_PATH: join(home, ".claude.json"),
-  };
-}
-
-function buildOpenAiAuthEnv() {
-  return { ...buildCommonAuthEnv(), CODEX_HOME: join(getAgentHomeDir(), ".codex") };
 }
 ```
 
-`TERM=dumb` + `NO_COLOR=1` matter — the Codex device-auth prompt prints the verification URL and user code with ANSI styling, and you need to parse it.
+`TERM=dumb` and `NO_COLOR=1` matter because Codex emits ANSI-decorated device auth output.
 
----
+## Part 4 - Claude Code onboarding
 
-## Part 3 — Claude Code: OAuth PKCE
+Use OAuth PKCE on the server, then install the returned refresh token through the CLI.
 
-Claude Code ships with an OAuth client you can drive without the user ever touching the CLI. The flow:
-
-1. Server generates a PKCE verifier + state, builds an authorize URL, returns it to the browser.
-2. User opens the URL, signs in to Claude, is redirected to `https://platform.claude.com/oauth/code/callback?code=...&state=...` and shown a code of the form `<code>#<state>`.
-3. User pastes that code back into the dashboard.
-4. Server exchanges it for a refresh token, then invokes `claude auth login` with `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` in the env to let the CLI write the token to `~/.claude/.credentials.json` itself.
-5. Auth state flips to `complete` once `~/.claude/.credentials.json` exists.
-
-### 3.1 Constants
+Constants:
 
 ```ts
 const ANTHROPIC_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
-const ANTHROPIC_OAUTH_TOKEN_URL     = "https://platform.claude.com/v1/oauth/token";
-const ANTHROPIC_OAUTH_MANUAL_REDIRECT_URL = "https://platform.claude.com/oauth/code/callback";
+const ANTHROPIC_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const ANTHROPIC_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const ANTHROPIC_OAUTH_MANUAL_REDIRECT_URL = "https://platform.claude.com/oauth/code/callback";
 const ANTHROPIC_OAUTH_SCOPES = [
   "org:create_api_key",
   "user:profile",
@@ -146,238 +132,136 @@ const ANTHROPIC_OAUTH_SCOPES = [
 ];
 ```
 
-### 3.2 Build the authorize URL
+Flow:
+
+1. `POST /api/provider-auth/anthropic/start`
+2. Server creates `codeVerifier` + `state`, stores them in memory, and returns `verificationUrl`
+3. Frontend opens that URL in a new tab
+4. User signs in and pastes back either the full callback URL or the raw `code#state`
+5. `POST /api/provider-auth/anthropic/submit`
+6. Server exchanges the code for tokens
+7. Server runs:
 
 ```ts
-function generateCodeVerifier() {
-  return randomBytes(32).toString("base64url");
-}
-function createCodeChallenge(v: string) {
-  return createHash("sha256").update(v).digest().toString("base64url");
-}
+spawnSync("claude", ["auth", "login"], {
+  cwd: getAgentHomeDir(),
+  encoding: "utf8",
+  env: {
+    ...buildAnthropicAuthEnv(),
+    CLAUDE_CODE_OAUTH_REFRESH_TOKEN: refreshToken,
+    CLAUDE_CODE_OAUTH_SCOPES: scopes.join(" "),
+  },
+  timeout: 15000,
+});
+```
 
-function buildVerificationUrl(codeVerifier: string, state: string): string {
-  const url = new URL(ANTHROPIC_OAUTH_AUTHORIZE_URL);
-  url.searchParams.set("code", "true");
-  url.searchParams.set("client_id", ANTHROPIC_OAUTH_CLIENT_ID);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("redirect_uri", ANTHROPIC_OAUTH_MANUAL_REDIRECT_URL);
-  url.searchParams.set("scope", ANTHROPIC_OAUTH_SCOPES.join(" "));
-  url.searchParams.set("code_challenge", createCodeChallenge(codeVerifier));
-  url.searchParams.set("code_challenge_method", "S256");
-  url.searchParams.set("state", state);
-  return url.toString();
+8. Server verifies `~/.claude/.credentials.json` exists and optionally reads `claude auth status --json`
+
+Important details:
+
+- Accept both a full callback URL and raw `code#state`
+- Reject `state` mismatches
+- Return the CLI stderr/stdout summary if `claude auth login` fails
+- Keep only one Claude session in flight at a time
+
+Do not use the PTY flow that launches `claude auth login --claudeai` and waits for terminal text. It looked simpler but was unreliable once the browser step moved outside the terminal.
+
+## Part 5 - Codex onboarding
+
+Codex should still use device auth driven by a child process.
+
+Flow:
+
+1. `POST /api/provider-auth/openai/start`
+2. Spawn:
+
+```ts
+spawn("codex", ["login", "--device-auth"], {
+  cwd: getAgentHomeDir(),
+  env: buildOpenAiAuthEnv(),
+  stdio: ["ignore", "pipe", "pipe"],
+});
+```
+
+3. Parse `verificationUrl` and `userCode` from stdout/stderr
+4. Return both to the UI
+5. Frontend auto-opens the URL and keeps polling `GET /api/provider-auth/openai`
+6. Auth is complete once `~/.codex/auth.json` exists and the child exits cleanly
+
+Useful extraction patterns:
+
+```ts
+const url = text.match(/https:\/\/(?:auth\.openai\.com|chatgpt\.com)[^\s]+/);
+const code = text.match(/\b([A-Z0-9]{4}-[A-Z0-9]{5}|[A-Z0-9]{4}-[A-Z0-9]{4}|[A-Z0-9]{9})\b/);
+```
+
+## Part 6 - Detection and status
+
+Ground truth is the filesystem:
+
+```ts
+await pathExists(join(home, ".claude", ".credentials.json"));
+await pathExists(join(home, ".codex", "auth.json"));
+```
+
+Optional richer Claude snapshot:
+
+```ts
+spawnSync("claude", ["auth", "status", "--json"], {
+  cwd: getAgentHomeDir(),
+  encoding: "utf8",
+  env: buildAnthropicAuthEnv(),
+  timeout: 5000,
+});
+```
+
+Use a combined status endpoint for the onboarding page:
+
+```ts
+GET /api/provider-auth/status
+-> {
+  anthropic: { detected, session },
+  openai: { detected, session },
+  setupPhase
 }
 ```
 
-### 3.3 Exchange the code and hand it to the CLI
+## Part 7 - Frontend behavior
 
-```ts
-async function exchangeAuthorizationCode(input: {
-  authorizationCode: string; codeVerifier: string; state: string;
-}) {
-  const r = await fetch(ANTHROPIC_OAUTH_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      client_id: ANTHROPIC_OAUTH_CLIENT_ID,
-      code: input.authorizationCode,
-      code_verifier: input.codeVerifier,
-      grant_type: "authorization_code",
-      redirect_uri: ANTHROPIC_OAUTH_MANUAL_REDIRECT_URL,
-      state: input.state,
-    }),
-  });
-  if (!r.ok) throw new Error(`Token exchange failed (${r.status})`);
-  return await r.json() as Record<string, unknown>;
-}
+Claude card:
 
-function installRefreshToken(refreshToken: string) {
-  spawnSync("claude", ["auth", "login"], {
-    cwd: getAgentHomeDir(),
-    encoding: "utf8",
-    env: {
-      ...buildAnthropicAuthEnv(),
-      CLAUDE_CODE_OAUTH_REFRESH_TOKEN: refreshToken,
-    },
-  });
-}
-```
+- click `Connect Claude Code`
+- open returned `verificationUrl` in a new tab
+- show a text input for callback paste
+- submit to `/api/provider-auth/anthropic/submit`
 
-### 3.4 Detect whether we are signed in
+Codex card:
 
-```ts
-async function anthropicAuthDetected(): Promise<boolean> {
-  const home = getAgentHomeDir();
-  if (await pathExists(join(home, ".claude", ".credentials.json"))) return true;
-  // Legacy path: only counts if it carries real auth material
-  const legacy = join(home, ".claude.json");
-  if (await pathExists(legacy)) {
-    try {
-      const c = JSON.parse(await readFile(legacy, "utf-8")) as any;
-      if (c.oauthAccount || c.sessionKey || c.apiKey) return true;
-    } catch {}
-  }
-  return false;
-}
+- click `Connect Codex`
+- open returned `verificationUrl` automatically
+- show `userCode`
+- poll until complete
 
-// Optional richer snapshot: `claude auth status --json`
-export async function getAnthropicAuthSnapshot() {
-  const r = spawnSync("claude", ["auth", "status", "--json"], {
-    cwd: getAgentHomeDir(), encoding: "utf8", env: buildAnthropicAuthEnv(),
-  });
-  // parse JSON → { loggedIn, email, organizationName, subscriptionType, ... }
-}
-```
+Both cards should:
 
-### 3.5 Endpoints
+- treat server state as source of truth
+- allow cancel
+- show exact error text from the server
 
-```ts
-// POST /api/provider-auth/anthropic/start
-// Creates a fresh PKCE session, returns { verificationUrl, sessionId, status: "waiting" }.
-router.post("/provider-auth/anthropic/start", adminOnly, startAnthropicSession);
+## Part 8 - Failure cases that matter
 
-// POST /api/provider-auth/anthropic/submit
-// Body: { code: "<code>#<state>" }  (accepts the pasted redirect URL too)
-// Exchanges, installs token via `claude auth login`, returns { status: "complete", snapshot }.
-router.post("/provider-auth/anthropic/submit", adminOnly, submitAnthropicCode);
+- Claude installer may finish without placing `claude` on PATH. Always include the npm fallback install.
+- If `claude auth login` returns success but no credentials file exists, treat that as failure.
+- If you change the app user's home after bootstrap, auth will appear broken because the files are in the wrong home.
+- Do not cache auth state in the database.
+- Keep one in-flight auth session per provider. Multiple overlapping sessions create confusing browser callbacks and leaked subprocesses.
 
-// GET  /api/provider-auth/anthropic         — current session state
-// POST /api/provider-auth/anthropic/cancel  — drop the in-memory session
-```
+## Part 9 - Replication checklist
 
-Session state is kept in a module-scoped variable (`let anthropicSession: AnthropicSession | null`), not the database. Only one auth flow is ever in flight.
-
----
-
-## Part 4 — Codex: OpenAI device-auth
-
-Codex doesn't expose an OAuth URL you can render yourself — instead the server spawns `codex login --device-auth`, parses the verification URL and user code from its stdout, and shows them to the admin. The child process stays alive until the user authenticates or the server kills it.
-
-### 4.1 Start: spawn and scrape stdout
-
-```ts
-function stripAnsi(s: string) {
-  return s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-async function startOpenAiDeviceAuth() {
-  const child = spawn("codex", ["login", "--device-auth"], {
-    cwd: getAgentHomeDir(),
-    env: buildOpenAiAuthEnv(),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  let userCode: string | null = null;
-  let verificationUrl: string | null = null;
-
-  const onData = (buf: Buffer) => {
-    const text = stripAnsi(buf.toString("utf8"));
-    const urlMatch = text.match(/https:\/\/auth\.openai\.com\/[^\s]+/);
-    if (urlMatch) verificationUrl = urlMatch[0];
-    const codeMatch = text.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/);
-    if (codeMatch) userCode = codeMatch[1];
-    // update session snapshot as soon as both are known
-  };
-  child.stdout.on("data", onData);
-  child.stderr.on("data", onData);
-
-  child.on("exit", () => {
-    // When the child exits cleanly, ~/.codex/auth.json exists — session flips
-    // to "complete". If it exits non-zero before we got both fields, it's an error.
-  });
-
-  return { child, getSnapshot: () => ({ userCode, verificationUrl }) };
-}
-```
-
-### 4.2 Detect whether we are signed in
-
-```ts
-async function codexAuthDetected(): Promise<boolean> {
-  return pathExists(join(getAgentHomeDir(), ".codex", "auth.json"));
-}
-```
-
-### 4.3 Endpoints
-
-```ts
-// POST /api/provider-auth/openai/start
-// Spawns `codex login --device-auth`, waits until it prints both fields,
-// returns { userCode, verificationUrl, sessionId, status: "waiting", expiresAt }.
-router.post("/provider-auth/openai/start", adminOnly, startOpenAiSession);
-
-// GET  /api/provider-auth/openai         — current session (frontend polls this)
-// POST /api/provider-auth/openai/cancel  — kills the child (SIGTERM)
-```
-
-Frontend polls `GET /api/provider-auth/openai` every ~2 seconds until `status === "complete"`. `DEVICE_CODE_TTL_MS = 15 * 60 * 1000` is a sensible ceiling after which the server force-cancels the session.
-
-### 4.4 Combined status
-
-```ts
-// GET /api/provider-auth/status → { anthropic: {...}, openai: {...} }
-// Used by the provider-setup page to render both cards in one request.
-```
-
----
-
-## Part 5 — Frontend page (`/setup/providers`)
-
-Two cards on one page. Each card goes through the same states: `idle → waiting → complete | failed | canceled`.
-
-### Claude Code card
-
-1. Admin clicks **Connect Claude Code** → `POST /api/provider-auth/anthropic/start`.
-2. Frontend opens `verificationUrl` in a new tab and shows a text input: "Paste the code from Claude".
-3. On submit, `POST /api/provider-auth/anthropic/submit` with `{ code }`.
-4. If `status: "complete"`, render the organization name / email / subscription type the snapshot returned.
-
-### Codex card
-
-1. Admin clicks **Connect Codex** → `POST /api/provider-auth/openai/start`.
-2. Frontend renders the returned `userCode` (big, monospaced) and a clickable `verificationUrl`.
-3. Poll `GET /api/provider-auth/openai` every 2 s. When `status: "complete"`, show success.
-4. "Cancel" button hits `POST /api/provider-auth/openai/cancel`.
-
-### Skip
-
-Both cards should show a **Skip for now** link that advances the setup phase — the app keeps working, the admin just cannot run those adapters yet.
-
----
-
-## Part 6 — Credential storage summary
-
-| Provider    | File                          | Written by            | Read by                       |
-| ----------- | ----------------------------- | --------------------- | ----------------------------- |
-| Claude Code | `~/.claude/.credentials.json` | `claude auth login`   | `claude` and any subprocess   |
-| Claude Code | `~/.claude.json` (legacy)     | Older CLI versions    | Fallback auth check           |
-| Codex       | `~/.codex/auth.json`          | `codex login --device-auth` | `codex` and any subprocess |
-
-Nothing about these files is app-specific. If you back them up, you back up the subscription binding.
-
----
-
-## Part 7 — Gotchas worth knowing
-
-- **Path drift.** If the server is launched without `~/.local/bin` on PATH, `claude` is simply "not installed". Always pin PATH in both the systemd unit and every `spawn()` env.
-- **ANSI in stdout.** The Codex CLI styles its device-auth output. Strip ANSI before regexing, and don't trust the first line — the URL and code may appear on different lines.
-- **Credentials file appears before the child exits.** Watch both file existence and child exit to decide when to mark `complete`.
-- **One session at a time.** Keep `anthropicSession` and `openAiSession` as module-level singletons and reject `/start` while one is live. Otherwise, you leak Codex subprocesses.
-- **Refresh tokens rotate.** When refresh tokens expire, `claude auth status --json` returns `loggedIn: false` even though the file exists. Don't cache detection; re-check on every page render.
-- **Legacy `~/.claude.json`.** Some fresh installs write it as an empty `{}`. Treat "exists" as authenticated only if it contains `oauthAccount`, `sessionKey`, or `apiKey`.
-- **Do not log the refresh token.** Redact it before anywhere near your logger.
-- **Cancellation must SIGTERM the child, not just clear the session object.** Otherwise the Codex process lingers.
-
----
-
-## Part 8 — Replication checklist
-
-- [ ] Bootstrap script installs Claude Code as app user via `curl https://claude.ai/install.sh | bash`.
-- [ ] Bootstrap script installs Codex via `npm install --global @openai/codex@latest`.
-- [ ] systemd unit exports `HOME`, `USERPROFILE`, and `PATH` with `~/.local/bin` first.
-- [ ] `provider-auth` service with the Anthropic constants above and the Codex spawn wrapper.
-- [ ] Endpoints: `anthropic/start`, `anthropic/submit`, `anthropic/cancel`, `anthropic`, `openai/start`, `openai/cancel`, `openai`, and a combined `status`.
-- [ ] Frontend `/setup/providers` page with two cards (OAuth paste flow + device-code flow) and polling.
-- [ ] Setup phase machine: after providers are bound (or skipped), flip `setupPhase` to `complete` so `/api/health` returns the terminal state and the page redirects into the app.
-- [ ] Admin-only guards on every endpoint (instance-admin role, not ordinary users).
+- [ ] Bootstrap installs Claude and Codex before onboarding begins
+- [ ] App user home contains `.claude`, `.codex`, `.claude.json`, `.claude/.claude.json`
+- [ ] systemd exports `HOME`, `USERPROFILE`, `PATH`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CREDENTIALS_PATH`, `CODEX_HOME`
+- [ ] Claude onboarding uses PKCE plus refresh-token install, not a PTY paste flow
+- [ ] Codex onboarding uses `codex login --device-auth`
+- [ ] Auth detection reads the real credential files
+- [ ] Frontend auto-opens the provider URL and reflects server session state

@@ -14,7 +14,7 @@ export function UsagePage() {
           <thead><tr><th>Dept</th><th>Runs</th><th>Tokens in</th><th>Tokens out</th><th>Cost</th></tr></thead>
           <tbody>
             {data.byDept.map((r: any) => (
-              <tr key={r.department}><td>{r.department}</td><td>{r.runs}</td><td>{r.tokens_in}</td><td>{r.tokens_out}</td><td>${r.cost_usd?.toFixed(4)}</td></tr>
+              <tr key={r.department}><td>{r.department}</td><td>{r.runs}</td><td>{r.tokens_in}</td><td>{r.tokens_out}</td><td>{formatUsd(r.cost_usd)}</td></tr>
             ))}
           </tbody>
         </table>
@@ -25,11 +25,15 @@ export function UsagePage() {
           <thead><tr><th>Day</th><th>Tokens in</th><th>Tokens out</th><th>Cost</th></tr></thead>
           <tbody>
             {data.byDay.map((r: any) => (
-              <tr key={r.day}><td>{r.day}</td><td>{r.tokens_in}</td><td>{r.tokens_out}</td><td>${r.cost_usd?.toFixed(4)}</td></tr>
+              <tr key={r.day}><td>{r.day}</td><td>{r.tokens_in}</td><td>{r.tokens_out}</td><td>{formatUsd(r.cost_usd)}</td></tr>
             ))}
           </tbody>
         </table>
       </div>
     </div>
   );
+}
+
+function formatUsd(value: number | null | undefined) {
+  return typeof value === "number" ? `$${value.toFixed(4)}` : "-";
 }

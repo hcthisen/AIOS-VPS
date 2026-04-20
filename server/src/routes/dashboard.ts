@@ -3,15 +3,17 @@
 
 import { readFile, writeFile, mkdir, stat, readdir } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { timingSafeEqual } from "crypto";
+import matter from "gray-matter";
 
 import { Router, badRequest, notFound } from "../http";
-import { adminOnly, requireAuth } from "../auth";
+import { adminOnly } from "../auth";
 import { config } from "../config";
 import { listDepartments, listCronTasks, listGoals } from "../services/departments";
 import { listRuns, getRun, activeRuns, listBacklog, runEvents, Run } from "../services/runs";
 import { listClaims } from "../services/claims";
-import { startRun, killRun, setGlobalPause, isGlobalPaused, activeProcessCount } from "../services/executor";
+import { startRun, killRun, killAllRuns, setGlobalPause, isGlobalPaused, activeProcessCount } from "../services/executor";
 import { runSyncLayer } from "../services/sync";
 import { db } from "../db";
 import { heartbeatStatus, runHeartbeatTick } from "../services/heartbeat";
@@ -216,7 +218,27 @@ export function registerDashboardRoutes(router: Router) {
       res.error(404, "no handler");
       return;
     }
-    const prompt = `${await readFile(promptPath, "utf-8")}\n\n---\nPayload:\n${JSON.stringify(payload, null, 2)}`;
+    const parsed = matter(await readFile(promptPath, "utf-8"));
+    const requiredKey = String(
+      parsed.data.webhookKey
+      || parsed.data.webhookSecret
+      || parsed.data.key
+      || parsed.data.secret
+      || "",
+    ).trim();
+    const suppliedKey = String(
+      req.headers["x-webhook-key"]
+      || req.headers["x-webhook-secret"]
+      || req.query.key
+      || req.query.secret
+      || "",
+    ).trim();
+    if (requiredKey && !matchesSecret(requiredKey, suppliedKey)) {
+      recordDelivery({ department: dept, endpoint, payload, outcome: "rejected:bad-key" });
+      res.error(401, "invalid webhook key");
+      return;
+    }
+    const prompt = `${parsed.content.trim()}\n\n---\nPayload:\n${JSON.stringify(payload, null, 2)}`;
     const r = await startRun({ departments: [dept], trigger: `webhook:${endpoint}`, prompt });
     recordDelivery({ department: dept, endpoint, payload, outcome: r.accepted ? `run:${r.run.id}` : "queued" });
     res.json({ ok: true, runId: r.run.id, accepted: r.accepted });
@@ -232,6 +254,12 @@ export function registerDashboardRoutes(router: Router) {
     await guard(req, res);
     setGlobalPause(false);
     res.json({ ok: true, paused: false });
+  });
+  router.post("/api/controls/kill-all", async (req, res) => {
+    await guard(req, res);
+    setGlobalPause(true);
+    const killed = killAllRuns();
+    res.json({ ok: true, killed, paused: true });
   });
   router.get("/api/controls/status", async (req, res) => {
     await guard(req, res);
@@ -279,7 +307,7 @@ export function registerDashboardRoutes(router: Router) {
   // ---------- File editors ----------
   router.get("/api/files/*", async (req, res) => {
     await guard(req, res);
-    const rel = req.path.replace(/^\/api\/files\//, "");
+    const rel = decodeURIComponent(req.path.replace(/^\/api\/files\//, ""));
     const abs = join(config.repoDir, rel);
     if (!abs.startsWith(config.repoDir)) throw badRequest("path escape");
     if (!existsSync(abs)) throw notFound("file not found");
@@ -294,14 +322,15 @@ export function registerDashboardRoutes(router: Router) {
 
   router.put("/api/files/*", async (req, res) => {
     await guard(req, res);
-    const rel = req.path.replace(/^\/api\/files\//, "");
+    const rel = decodeURIComponent(req.path.replace(/^\/api\/files\//, ""));
     const abs = join(config.repoDir, rel);
     if (!abs.startsWith(config.repoDir)) throw badRequest("path escape");
     const content = typeof req.body === "string" ? req.body
       : req.rawBody ? req.rawBody.toString("utf-8")
       : JSON.stringify(req.body);
-    await mkdir(join(abs, ".."), { recursive: true });
+    await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, content);
+    await runSyncLayer({ commit: false }).catch(() => {});
     res.json({ ok: true });
   });
 }
@@ -310,4 +339,12 @@ function recordDelivery(d: { department: string; endpoint: string; payload: unkn
   db.prepare(`INSERT INTO webhook_deliveries(department, endpoint, source, payload, outcome, received_at)
               VALUES(?, ?, ?, ?, ?, ?)`)
     .run(d.department, d.endpoint, null, JSON.stringify(d.payload).slice(0, 8000), d.outcome, Date.now());
+}
+
+function matchesSecret(expected: string, actual: string): boolean {
+  if (!expected || !actual) return false;
+  const a = Buffer.from(expected, "utf-8");
+  const b = Buffer.from(actual, "utf-8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }

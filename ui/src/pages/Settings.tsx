@@ -14,6 +14,7 @@ export function SettingsPage() {
 
   const runSync = async () => { setSyncResult(await api("/api/controls/sync", { method: "POST" })); };
   const runHeartbeat = async () => { await api("/api/controls/heartbeat", { method: "POST" }); refresh(); };
+  const killAll = async () => { await api("/api/controls/kill-all", { method: "POST" }); refresh(); };
 
   return (
     <div className="col">
@@ -29,6 +30,7 @@ export function SettingsPage() {
         <div className="row">
           <button onClick={runSync}>Run sync</button>
           <button onClick={runHeartbeat}>Trigger heartbeat tick</button>
+          <button className="danger" onClick={killAll}>Kill all + pause</button>
         </div>
         {syncResult && <pre className="log small">{JSON.stringify(syncResult, null, 2)}</pre>}
       </div>

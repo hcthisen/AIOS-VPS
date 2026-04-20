@@ -8,8 +8,7 @@ import { join, dirname } from "path";
 
 import { config } from "../config";
 import { buildCommonAuthEnv } from "./provider-auth";
-import { cloneUrlWithPat, GithubCreds } from "./github";
-import { log } from "../log";
+import { cloneUrlWithPat, getGithubCreds, GithubCreds } from "./github";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,8 +24,20 @@ async function pathExists(p: string): Promise<boolean> {
   try { await stat(p); return true; } catch { return false; }
 }
 
-export async function gitRun(args: string[], cwd = config.repoDir) {
-  return execFileAsync("git", args, { cwd, env: { ...buildCommonAuthEnv() } });
+export async function gitRun(args: string[], cwd = config.repoDir, env: NodeJS.ProcessEnv = buildGitEnv()) {
+  return execFileAsync("git", args, { cwd, env });
+}
+
+function buildGitEnv(): NodeJS.ProcessEnv {
+  const creds = getGithubCreds();
+  const env = buildCommonAuthEnv();
+  if (creds?.mode === "deploy_key" && creds.privateKeyPath) {
+    return {
+      ...env,
+      GIT_SSH_COMMAND: `ssh -i "${creds.privateKeyPath}" -o StrictHostKeyChecking=accept-new`,
+    };
+  }
+  return env;
 }
 
 export async function cloneRepo(input: {
@@ -34,16 +45,24 @@ export async function cloneRepo(input: {
 }): Promise<{ ok: true; commit: string } | { ok: false; error: string }> {
   try {
     await mkdir(dirname(config.repoDir), { recursive: true });
+    const useDeployKey = input.creds.mode === "deploy_key" && !!input.creds.privateKeyPath;
     const url = input.creds.mode === "pat" && input.creds.username && input.creds.token
       ? cloneUrlWithPat(input.cloneUrl, input.creds.username, input.creds.token)
-      : input.cloneUrl;
+      : useDeployKey && input.cloneUrl.startsWith("https://github.com/")
+        ? input.cloneUrl.replace(/^https:\/\/github\.com\//, "git@github.com:")
+        : input.cloneUrl;
+    const env = useDeployKey
+      ? {
+          ...buildCommonAuthEnv(),
+          GIT_SSH_COMMAND: `ssh -i "${input.creds.privateKeyPath}" -o StrictHostKeyChecking=accept-new`,
+        }
+      : buildGitEnv();
     if (existsSync(join(config.repoDir, ".git"))) {
-      // Already cloned — just pull.
-      await gitRun(["pull", "--ff-only"]);
+      await gitRun(["pull", "--ff-only"], config.repoDir, env);
     } else {
-      await execFileAsync("git", ["clone", url, config.repoDir]);
+      await execFileAsync("git", ["clone", url, config.repoDir], { env });
     }
-    const { stdout } = await gitRun(["rev-parse", "HEAD"]);
+    const { stdout } = await gitRun(["rev-parse", "HEAD"], config.repoDir, env);
     return { ok: true, commit: stdout.trim() };
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e).slice(0, 300) };
@@ -76,7 +95,6 @@ export async function readAiosYaml(): Promise<AiosYaml | null> {
 function parseSimpleYaml(text: string): AiosYaml {
   const out: any = {};
   const lines = text.split(/\r?\n/);
-  let currentKey: string | null = null;
   let currentList: any[] | null = null;
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, "");
@@ -87,29 +105,29 @@ function parseSimpleYaml(text: string): AiosYaml {
       continue;
     }
     const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (kv) {
-      const [, key, value] = kv;
-      currentKey = key;
-      if (value === "" || value === null) {
-        currentList = [];
-        out[key] = currentList;
-      } else if (/^\[.*\]$/.test(value.trim())) {
-        out[key] = value.trim().slice(1, -1).split(",").map((s) => stripQuotes(s.trim())).filter(Boolean);
-        currentList = null;
-      } else {
-        out[key] = coerce(stripQuotes(value));
-        currentList = null;
-      }
+    if (!kv) continue;
+    const [, key, value] = kv;
+    if (value === "" || value === null) {
+      currentList = [];
+      out[key] = currentList;
+    } else if (/^\[.*\]$/.test(value.trim())) {
+      out[key] = value.trim().slice(1, -1).split(",").map((s) => stripQuotes(s.trim())).filter(Boolean);
+      currentList = null;
+    } else {
+      out[key] = coerce(stripQuotes(value));
+      currentList = null;
     }
   }
   return out;
 }
+
 function stripQuotes(s: string) {
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+  if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
     return s.slice(1, -1);
   }
   return s;
 }
+
 function coerce(s: string): any {
   if (s === "true") return true;
   if (s === "false") return false;
@@ -119,7 +137,6 @@ function coerce(s: string): any {
 
 export async function scaffoldRepo(dir: string, opts: { name: string }): Promise<void> {
   await mkdir(dir, { recursive: true });
-  // aios.yaml
   await writeFile(join(dir, "aios.yaml"),
     `version: 1
 departments:
@@ -129,28 +146,26 @@ ignored:
   - .git
   - dashboard
 `);
-  // root context
   await writeFile(join(dir, "CLAUDE.md"),
-    `# ${opts.name} — root context\n\nThis is the AIOS-managed monorepo for ${opts.name}. Top-level folders listed in \`aios.yaml\` are departments.\n`);
+    `# ${opts.name} - root context\n\nThis is the AIOS-managed monorepo for ${opts.name}. Top-level folders listed in \`aios.yaml\` are departments.\n`);
   await writeFile(join(dir, "AGENTS.md"),
-    `# ${opts.name} — root context\n\nThis is the AIOS-managed monorepo for ${opts.name}. Top-level folders listed in \`aios.yaml\` are departments.\n`);
+    `# ${opts.name} - root context\n\nThis is the AIOS-managed monorepo for ${opts.name}. Top-level folders listed in \`aios.yaml\` are departments.\n`);
   await writeFile(join(dir, "org.md"),
-    `# Organization\n\nReplace this with a description of your business, priorities, and shared conventions.\n`);
+    "# Organization\n\nReplace this with a description of your business, priorities, and shared conventions.\n");
   await writeFile(join(dir, "README.md"),
     `# ${opts.name}\n\nManaged by AIOS. See \`aios.yaml\` for the department list.\n`);
   await writeFile(join(dir, ".gitignore"),
-    `node_modules/\n.env\n.env.local\nlogs/\n*.log\n`);
+    "node_modules/\n.env\n.env.local\nlogs/\n*.log\n");
 
-  // Sample department
   const dept = join(dir, "sample");
   await mkdir(join(dept, "cron"), { recursive: true });
   await mkdir(join(dept, "goals"), { recursive: true });
   await mkdir(join(dept, "skills"), { recursive: true });
   await mkdir(join(dept, "logs"), { recursive: true });
   await writeFile(join(dept, "CLAUDE.md"),
-    `# sample department\n\nOne-line summary: sample department used to demonstrate the AIOS execution model.\n`);
+    "# sample department\n\nOne-line summary: sample department used to demonstrate the AIOS execution model.\n");
   await writeFile(join(dept, "AGENTS.md"),
-    `# sample department\n\nOne-line summary: sample department used to demonstrate the AIOS execution model.\n`);
+    "# sample department\n\nOne-line summary: sample department used to demonstrate the AIOS execution model.\n");
   await writeFile(join(dept, "cron", "hello.md"),
     `---
 schedule: "0 * * * *"
@@ -186,5 +201,7 @@ export async function repoHead(): Promise<string | null> {
   try {
     const { stdout } = await gitRun(["rev-parse", "HEAD"]);
     return stdout.trim();
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
