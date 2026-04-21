@@ -28,17 +28,21 @@ export function RunDetail({ id, navigate }: { id: string; navigate: (t: string) 
 
   return (
     <div className="col">
-      <a onClick={() => navigate("/runs")} className="small">← runs</a>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 style={{ margin: 0 }}>Run <span className="mono">{id}</span></h2>
-        {run?.status === "running" && <button className="danger" onClick={kill}>Kill</button>}
-      </div>
-      {run && (
-        <div className="small muted">
-          {run.department} · {run.trigger} · {run.provider || "—"} · <span className="badge">{run.status}</span>
-          {run.commit_sha && <> · commit <code>{run.commit_sha.slice(0, 7)}</code></>}
+      <a onClick={() => navigate("/runs")} className="small">{"\u2190"} Runs</a>
+      <div className="page-header">
+        <div>
+          <h2>Run <span className="mono">{id}</span></h2>
+          {run && (
+            <div className="small muted">
+              {run.department} \u00b7 {run.trigger} \u00b7 {run.provider || "\u2014"} \u00b7 <span className="badge">{run.status}</span>
+              {run.commit_sha && <> \u00b7 commit <code>{run.commit_sha.slice(0, 7)}</code></>}
+            </div>
+          )}
         </div>
-      )}
+        <div className="page-header-actions">
+          {run?.status === "running" && <button className="danger" onClick={kill}>Kill</button>}
+        </div>
+      </div>
       <pre ref={ref} className="log">{text || "(no output yet)"}</pre>
     </div>
   );

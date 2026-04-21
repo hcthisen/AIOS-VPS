@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
+import { Banner } from "../components/Banner";
 
 export function RepoSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
   const [github, setGithub] = useState<{ mode: "pat" | "deploy_key" | null }>({ mode: null });
@@ -50,11 +52,14 @@ export function RepoSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
   };
 
   return (
-    <div className="card col">
-      <h2 style={{ marginTop: 0 }}>Choose a repo</h2>
+    <Section title="Choose a repo">
       <div className="row">
-        <label><input type="radio" checked={mode === "create"} onChange={() => setMode("create")} disabled={github.mode === "deploy_key"} /> Create new</label>
-        <label><input type="radio" checked={mode === "attach"} onChange={() => setMode("attach")} /> Attach existing</label>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="radio" checked={mode === "create"} onChange={() => setMode("create")} disabled={github.mode === "deploy_key"} style={{ width: "auto", minHeight: 0 }} /> Create new
+        </label>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="radio" checked={mode === "attach"} onChange={() => setMode("attach")} style={{ width: "auto", minHeight: 0 }} /> Attach existing
+        </label>
       </div>
       {github.mode === "deploy_key" && (
         <div className="small muted">
@@ -86,7 +91,7 @@ export function RepoSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
           {busy ? "..." : mode === "create" ? "Create and clone" : "Attach and validate"}
         </button>
       </div>
-      {error && <div className="badge err">{error}</div>}
-    </div>
+      {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
+    </Section>
   );
 }

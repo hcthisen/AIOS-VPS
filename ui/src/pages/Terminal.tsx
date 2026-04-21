@@ -23,9 +23,9 @@ export function TerminalPage() {
     return () => { window.removeEventListener("resize", onResize); ws.close(); term.dispose(); };
   }, []);
   return (
-    <div className="col" style={{ height: "calc(100vh - 48px)" }}>
+    <div className="col" style={{ height: "calc(100vh - var(--chrome-h) - 48px)" }}>
       <h2 style={{ margin: 0 }}>Terminal</h2>
-      <div ref={ref} style={{ flex: 1, background: "#000", borderRadius: 6 }} />
+      <div ref={ref} style={{ flex: 1, background: "#000", borderRadius: 6, minHeight: 0 }} />
     </div>
   );
 }

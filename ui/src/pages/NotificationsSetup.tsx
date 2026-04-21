@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
+import { Banner } from "../components/Banner";
 
 type Channel = "telegram" | "email" | "none";
 
@@ -208,12 +210,17 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
   };
 
   return (
-    <div className="card col">
-      <h2 style={{ marginTop: 0 }}>Notifications</h2>
+    <Section title="Notifications">
       <div className="row">
-        <label><input type="radio" checked={channel === "telegram"} onChange={() => setChannel("telegram")} /> Telegram</label>
-        <label><input type="radio" checked={channel === "email"} onChange={() => setChannel("email")} /> Email</label>
-        <label><input type="radio" checked={channel === "none"} onChange={() => setChannel("none")} /> None</label>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="radio" checked={channel === "telegram"} onChange={() => setChannel("telegram")} style={{ width: "auto", minHeight: 0 }} /> Telegram
+        </label>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="radio" checked={channel === "email"} onChange={() => setChannel("email")} style={{ width: "auto", minHeight: 0 }} /> Email
+        </label>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="radio" checked={channel === "none"} onChange={() => setChannel("none")} style={{ width: "auto", minHeight: 0 }} /> None
+        </label>
       </div>
 
       {channel === "telegram" && (
@@ -253,18 +260,7 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
                 {(pairing?.candidates || []).map((candidate) => {
                   const approved = candidate.chatId === pairing?.pairedChatId;
                   return (
-                    <div
-                      key={candidate.chatId}
-                      style={{
-                        border: "1px solid var(--border)",
-                        borderRadius: 6,
-                        padding: 12,
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 12,
-                        alignItems: "center",
-                      }}
-                    >
+                    <div key={candidate.chatId} className="candidate-card">
                       <div className="col" style={{ gap: 4 }}>
                         <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                           <strong>{candidate.displayName}</strong>
@@ -314,8 +310,8 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
         </button>
       </div>
 
-      {tested && <div className="badge ok">{tested}</div>}
-      {error && <div className="badge err">{error}</div>}
-    </div>
+      {tested && <Banner kind="ok" onDismiss={() => setTested(null)}>{tested}</Banner>}
+      {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
+    </Section>
   );
 }

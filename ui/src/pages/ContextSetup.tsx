@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
+import { Banner } from "../components/Banner";
 
 interface ContextForm {
   organizationName: string;
@@ -47,18 +49,10 @@ export function ContextSetup({ onAdvance }: { onAdvance: () => Promise<void> }) 
   };
 
   return (
-    <div className="card col">
-      <h2 style={{ marginTop: 0 }}>Shared context</h2>
-      <p className="small muted">
-        This step defines the organization and deployment scope for the whole repository. AIOS writes the root
-        <code> org.md </code>
-        plus the root
-        <code> CLAUDE.md </code>
-        and
-        <code> AGENTS.md</code>,
-        then syncs shared context into each department.
-      </p>
-
+    <Section
+      title="Shared context"
+      description={<>This step defines the organization and deployment scope for the whole repository. AIOS writes the root <code>org.md</code> plus the root <code>CLAUDE.md</code> and <code>AGENTS.md</code>, then syncs shared context into each department.</>}
+    >
       <input
         value={form.organizationName}
         onChange={(e) => setForm({ ...form, organizationName: e.target.value })}
@@ -96,7 +90,7 @@ export function ContextSetup({ onAdvance }: { onAdvance: () => Promise<void> }) 
         </button>
       </div>
 
-      {error && <div className="badge err">{error}</div>}
-    </div>
+      {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
+    </Section>
   );
 }

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { api } from "../api";
+import { Banner } from "../components/Banner";
 
 export function AuthPage({ onAuthed, firstRun, setupPhase }: { onAuthed: () => void; firstRun: boolean; setupPhase: string }) {
   const [email, setEmail] = useState("");
@@ -28,7 +29,7 @@ export function AuthPage({ onAuthed, firstRun, setupPhase }: { onAuthed: () => v
         <form onSubmit={submit} className="col">
           <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           <input type="password" placeholder="Password (8+ chars)" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
-          {error && <div className="badge err">{error}</div>}
+          {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
           <button className="primary" disabled={busy} type="submit">
             {busy ? "…" : mode === "signup" ? "Create admin" : "Log in"}
           </button>

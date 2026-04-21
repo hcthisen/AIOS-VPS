@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
 
 export function ManualRunPage() {
   const [depts, setDepts] = useState<string[]>([]);
@@ -23,22 +24,33 @@ export function ManualRunPage() {
   };
 
   return (
-    <div className="col" style={{ maxWidth: 720 }}>
+    <div className="col narrow">
       <h2>Manual run</h2>
-      <select value={dept} onChange={(e) => setDept(e.target.value)}>
-        <option value="">-- department --</option>
-        {depts.map((d) => <option key={d} value={d}>{d}</option>)}
-      </select>
-      <select value={provider} onChange={(e) => setProvider(e.target.value as any)}>
-        <option value="">default provider</option>
-        <option value="claude-code">Claude Code</option>
-        <option value="codex">Codex</option>
-      </select>
-      <textarea placeholder="Prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-      <div className="row">
-        <button className="primary" onClick={fire} disabled={!dept || !prompt}>Fire</button>
-        {msg && <span className="small">{msg}</span>}
-      </div>
+      <Section description="Fire a one-off prompt at a department. If the department is busy, the request is queued.">
+        <label className="col">
+          <span className="small muted">Department</span>
+          <select value={dept} onChange={(e) => setDept(e.target.value)}>
+            <option value="">-- select department --</option>
+            {depts.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </label>
+        <label className="col">
+          <span className="small muted">Provider</span>
+          <select value={provider} onChange={(e) => setProvider(e.target.value as any)}>
+            <option value="">Default provider</option>
+            <option value="claude-code">Claude Code</option>
+            <option value="codex">Codex</option>
+          </select>
+        </label>
+        <label className="col">
+          <span className="small muted">Prompt</span>
+          <textarea placeholder="What should this run do?" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        </label>
+        <div className="row">
+          <button className="primary" onClick={fire} disabled={!dept || !prompt}>Fire</button>
+          {msg && <span className="small muted">{msg}</span>}
+        </div>
+      </Section>
     </div>
   );
 }

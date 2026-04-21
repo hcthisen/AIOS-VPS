@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import { Section } from "../components/Section";
 
 export function SettingsPage() {
   const [controls, setControls] = useState<any>(null);
@@ -20,26 +21,24 @@ export function SettingsPage() {
     <div className="col">
       <h2>Settings</h2>
 
-      <div className="card col">
-        <h3 style={{ margin: 0 }}>Controls</h3>
-        <div className="small muted">
-          heartbeat {controls?.heartbeat?.running ? "on" : "off"} ·
-          active processes {controls?.activeProcesses ?? 0} ·
-          paused: <b>{String(!!controls?.paused)}</b>
-        </div>
+      <Section
+        title="Controls"
+        description={`heartbeat ${controls?.heartbeat?.running ? "on" : "off"} \u00b7 active processes ${controls?.activeProcesses ?? 0} \u00b7 paused: ${String(!!controls?.paused)}`}
+      >
         <div className="row">
           <button onClick={runSync}>Run sync</button>
           <button onClick={runHeartbeat}>Trigger heartbeat tick</button>
           <button className="danger" onClick={killAll}>Kill all + pause</button>
         </div>
         {syncResult && <pre className="log small">{JSON.stringify(syncResult, null, 2)}</pre>}
-      </div>
+      </Section>
 
-      <div className="card col">
-        <h3 style={{ margin: 0 }}>Notifications</h3>
-        <div className="small mono">{JSON.stringify(notif || {}, null, 2)}</div>
-        <p className="small muted">To change, run the onboarding notifications step again by POSTing to <code>/api/onboarding/notifications/save</code>.</p>
-      </div>
+      <Section
+        title="Notifications"
+        description={<>To change, run the onboarding notifications step again by POSTing to <code>/api/onboarding/notifications/save</code>.</>}
+      >
+        <pre className="code-block small">{JSON.stringify(notif || {}, null, 2)}</pre>
+      </Section>
     </div>
   );
 }
