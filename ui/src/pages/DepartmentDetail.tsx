@@ -10,6 +10,8 @@ import { FeedbackButton, useActionRunner } from "../components/FeedbackButton";
 import { DirtyDot } from "../components/DirtyDot";
 import { SavedAt } from "../components/SavedAt";
 import { describeCronSchedule } from "../lib/cron";
+import { FilesTab } from "./files/FilesTab";
+import { FilesQuery } from "./files/types";
 
 interface CronTask {
   name: string;
@@ -57,7 +59,7 @@ interface Department {
   backlog: BacklogEntry[];
 }
 
-type TabId = "tasks" | "goals" | "env" | "runs" | "backlog";
+type TabId = "tasks" | "goals" | "files" | "env" | "runs" | "backlog";
 
 type EditorMode = "create" | "edit";
 
@@ -81,8 +83,28 @@ interface GoalEditorState {
 
 export function DepartmentDetail({ name, navigate }: { name: string; navigate: (t: string) => void }) {
   const [d, setD] = useState<Department | null>(null);
-  const [tab, setTab] = useState<TabId>("tasks");
+  const [tab, setTabState] = useState<TabId>(() => readTabFromUrl());
+  const [filesQuery, setFilesQueryState] = useState<FilesQuery>(() => readFilesQueryFromUrl());
   const [notice, setNotice] = useState<string | null>(null);
+
+  const setTab = (next: TabId) => {
+    setTabState(next);
+    writeUrlParams({ tab: next, files: next === "files" ? filesQuery : undefined });
+  };
+
+  const setFilesQuery = (next: FilesQuery) => {
+    setFilesQueryState(next);
+    writeUrlParams({ tab, files: next });
+  };
+
+  useEffect(() => {
+    const onPop = () => {
+      setTabState(readTabFromUrl());
+      setFilesQueryState(readFilesQueryFromUrl());
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const [envText, setEnvText] = useState("");
   const [envInitial, setEnvInitial] = useState("");
@@ -220,6 +242,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
   const tabs = [
     { id: "tasks", label: `Tasks${d.cron?.length ? ` (${d.cron.length})` : ""}` },
     { id: "goals", label: `Goals${d.goals?.length ? ` (${d.goals.length})` : ""}` },
+    { id: "files", label: "Files" },
     { id: "env", label: "Environment" },
     { id: "runs", label: "Runs" },
     { id: "backlog", label: `Backlog${d.backlog?.length ? ` (${d.backlog.length})` : ""}` },
@@ -436,6 +459,14 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
         </Section>
       )}
 
+      {tab === "files" && (
+        <FilesTab
+          deptName={name}
+          query={filesQuery}
+          onQueryChange={setFilesQuery}
+        />
+      )}
+
       <Drawer
         open={cronEditor != null}
         title={cronEditor?.mode === "create" ? "Add scheduled task" : "Edit scheduled task"}
@@ -641,3 +672,37 @@ function buildRelPath(dept: string, sub: "cron" | "goals", name: string) {
   const file = name.trim().replace(/[^\w.-]+/g, "-");
   return `${dept}/${sub}/${file}.md`;
 }
+
+const VALID_TABS: TabId[] = ["tasks", "goals", "files", "env", "runs", "backlog"];
+
+function readTabFromUrl(): TabId {
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("tab");
+  if (raw && VALID_TABS.includes(raw as TabId)) return raw as TabId;
+  return "tasks";
+}
+
+function readFilesQueryFromUrl(): FilesQuery {
+  const params = new URLSearchParams(window.location.search);
+  const visibility = params.get("visibility");
+  const prefix = params.get("prefix") || undefined;
+  const highlight = params.get("highlight") || undefined;
+  return {
+    visibility: visibility === "private" ? "private" : visibility === "public" ? "public" : undefined,
+    prefix,
+    highlight,
+  };
+}
+
+function writeUrlParams(opts: { tab: TabId; files?: FilesQuery }) {
+  const url = new URL(window.location.href);
+  const params = url.searchParams;
+  if (opts.tab === "tasks") params.delete("tab"); else params.set("tab", opts.tab);
+  const f = opts.tab === "files" ? opts.files : undefined;
+  if (f?.visibility) params.set("visibility", f.visibility); else params.delete("visibility");
+  if (f?.prefix) params.set("prefix", f.prefix); else params.delete("prefix");
+  if (f?.highlight) params.set("highlight", f.highlight); else params.delete("highlight");
+  const next = `${url.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
+  window.history.replaceState({}, "", next);
+}
+

@@ -118,12 +118,21 @@ async function readBody(req: IncomingMessage): Promise<Buffer> {
   });
 }
 
+// Paths where we skip body buffering so routes can stream the request
+// directly (e.g. large file uploads). Matched against url.pathname.
+const STREAMING_PATHS = [/^\/api\/departments\/[^/]+\/storage\/objects\/upload$/];
+
 async function parseRequest(req: IncomingMessage): Promise<AiosRequest> {
   const areq = req as AiosRequest;
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   areq.path = url.pathname;
   areq.query = Object.fromEntries(url.searchParams.entries());
   areq.params = {};
+  if (STREAMING_PATHS.some((r) => r.test(areq.path))) {
+    areq.rawBody = undefined;
+    areq.body = undefined;
+    return areq;
+  }
   const buf = await readBody(req);
   areq.rawBody = buf;
   const ct = (req.headers["content-type"] || "").toString();

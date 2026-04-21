@@ -1,0 +1,290 @@
+// Per-department S3 storage routes. Setup, probe, browser, upload, delete,
+// signed URLs. All routes admin-guarded. Secrets never leave the server via GET.
+
+import { Router, badRequest, notFound } from "../http";
+import { adminOnly } from "../auth";
+import { log } from "../log";
+
+import {
+  applyInstructions,
+  clearInstructions,
+  resetInstructionsToDefaults,
+} from "../services/storageInstructions";
+import {
+  StorageConfig,
+  clearStorageConfig,
+  mergeStoredSecret,
+  readStorageConfig,
+  readStorageConfigPublic,
+  validateConfig,
+  writeStorageConfig,
+} from "../services/storageConfig";
+import {
+  deleteObject,
+  listObjects,
+  presignGet,
+  streamingUpload,
+  translateError,
+} from "../services/storageClient";
+import { probe } from "../services/storageProbe";
+
+// Serialize concurrent writes per department so a second POST /config can't
+// race ahead of an in-flight probe+write.
+const deptLocks = new Map<string, Promise<void>>();
+
+function withDeptLock<T>(dept: string, fn: () => Promise<T>): Promise<T> {
+  const prev = deptLocks.get(dept) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  deptLocks.set(
+    dept,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
+}
+
+function assertUnderPrefix(key: string, publicPrefix: string, privatePrefix: string) {
+  if (!key) throw badRequest("key required");
+  if (key.includes("..") || key.startsWith("/") || key.includes("\\")) {
+    throw badRequest("invalid key");
+  }
+  if (!key.startsWith(publicPrefix) && !key.startsWith(privatePrefix)) {
+    throw badRequest("key must be under a configured prefix");
+  }
+}
+
+function resolvePrefix(visibility: string, cfg: StorageConfig, sub: string): string {
+  const root = visibility === "private" ? cfg.privatePrefix : cfg.publicPrefix;
+  if (!sub) return root;
+  const cleanSub = sub.replace(/^\/+/, "").replace(/\\+/g, "/");
+  if (cleanSub.includes("..")) throw badRequest("invalid prefix");
+  if (cleanSub.startsWith(root)) return cleanSub.endsWith("/") ? cleanSub : `${cleanSub}/`;
+  const joined = `${root}${cleanSub}`;
+  return joined.endsWith("/") ? joined : `${joined}/`;
+}
+
+function publicUrlFor(cfg: StorageConfig, key: string): string | undefined {
+  if (!cfg.publicBaseUrl) return undefined;
+  if (!key.startsWith(cfg.publicPrefix)) return undefined;
+  const tail = key.slice(cfg.publicPrefix.length);
+  return `${cfg.publicBaseUrl}/${tail}`;
+}
+
+export function registerStorageRoutes(router: Router) {
+  const guard = adminOnly();
+
+  router.get("/api/departments/:dept/storage/config", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    const cfg = await readStorageConfigPublic(dept);
+    res.json(cfg);
+  });
+
+  router.post("/api/departments/:dept/storage/test", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    const body = (req.body || {}) as Partial<StorageConfig>;
+    const merged = await mergeStoredSecret(dept, body);
+    let cfg: StorageConfig;
+    try {
+      cfg = validateConfig(merged);
+    } catch (e) {
+      throw badRequest((e as Error).message);
+    }
+    const result = await probe(cfg);
+    log.info("storage probe", {
+      dept,
+      endpoint: cfg.endpoint,
+      bucket: cfg.bucket,
+      ok: result.ok,
+      errorCode: result.error?.code,
+    });
+    res.json(result);
+  });
+
+  router.post("/api/departments/:dept/storage/config", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    const body = (req.body || {}) as Partial<StorageConfig>;
+    const merged = await mergeStoredSecret(dept, body);
+    let cfg: StorageConfig;
+    try {
+      cfg = validateConfig(merged);
+    } catch (e) {
+      throw badRequest((e as Error).message);
+    }
+    await withDeptLock(dept, async () => {
+      const result = await probe(cfg);
+      if (!result.ok) {
+        throw badRequest(result.error?.message || "probe failed", {
+          code: "ProbeFailed",
+          error: result.error,
+          result,
+        });
+      }
+      await writeStorageConfig(dept, cfg);
+      await applyInstructions(dept);
+      log.info("storage configured", {
+        dept,
+        endpoint: cfg.endpoint,
+        bucket: cfg.bucket,
+      });
+    });
+    res.json({ ok: true });
+  });
+
+  router.delete("/api/departments/:dept/storage/config", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    await withDeptLock(dept, async () => {
+      await clearStorageConfig(dept);
+      await clearInstructions(dept);
+      log.info("storage disconnected", { dept });
+    });
+    res.json({ ok: true });
+  });
+
+  router.post("/api/departments/:dept/storage/instructions/reset", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    const changed = await resetInstructionsToDefaults(dept);
+    res.json({ ok: true, changed });
+  });
+
+  router.get("/api/departments/:dept/storage/objects", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    const cfg = await readStorageConfig(dept);
+    if (!cfg) throw notFound("storage not configured");
+    const visibility = req.query.visibility === "private" ? "private" : "public";
+    const sub = req.query.prefix || "";
+    const prefix = resolvePrefix(visibility, cfg, sub);
+    const search = (req.query.search || "").toLowerCase();
+    const sort = req.query.sort || "name";
+    const order = req.query.order === "desc" ? "desc" : "asc";
+    const cursor = req.query.cursor || undefined;
+
+    let listed;
+    try {
+      listed = await listObjects(cfg, prefix, {
+        delimiter: "/",
+        maxKeys: 1000,
+        continuationToken: cursor,
+      });
+    } catch (e) {
+      const friendly = translateError(e);
+      throw badRequest(friendly.message, { code: friendly.code, hint: friendly.hint });
+    }
+
+    const folders = listed.prefixes.map((p) => ({
+      key: p,
+      name: p.slice(prefix.length).replace(/\/$/, ""),
+    }));
+    let files = listed.objects
+      .filter((o) => o.key !== prefix)
+      .map((o) => {
+        const name = o.key.slice(prefix.length);
+        return {
+          key: o.key,
+          name,
+          size: o.size,
+          lastModified: o.lastModified,
+          publicUrl: publicUrlFor(cfg, o.key),
+        };
+      })
+      .filter((f) => !f.name.includes("/"));
+
+    if (search) files = files.filter((f) => f.name.toLowerCase().includes(search));
+    files.sort((a, b) => {
+      let cmp = 0;
+      if (sort === "size") cmp = a.size - b.size;
+      else if (sort === "date") {
+        const at = a.lastModified ? a.lastModified.getTime() : 0;
+        const bt = b.lastModified ? b.lastModified.getTime() : 0;
+        cmp = at - bt;
+      } else cmp = a.name.localeCompare(b.name);
+      return order === "desc" ? -cmp : cmp;
+    });
+
+    res.json({
+      visibility,
+      prefix,
+      folders,
+      files,
+      nextCursor: listed.nextToken,
+    });
+  });
+
+  router.post("/api/departments/:dept/storage/objects/upload", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    const cfg = await readStorageConfig(dept);
+    if (!cfg) throw notFound("storage not configured");
+    const visibility = req.query.visibility === "private" ? "private" : "public";
+    const sub = req.query.prefix || "";
+    const filename = (req.query.filename || "").trim();
+    if (!filename) throw badRequest("filename required");
+    if (filename.includes("/") || filename.includes("\\") || filename.includes("..")) {
+      throw badRequest("invalid filename");
+    }
+    const prefix = resolvePrefix(visibility, cfg, sub);
+    const key = `${prefix}${filename}`;
+    const contentType = (req.headers["content-type"] as string) || "application/octet-stream";
+    try {
+      await streamingUpload(cfg, key, req, contentType);
+    } catch (e) {
+      const friendly = translateError(e);
+      throw badRequest(friendly.message, { code: friendly.code, hint: friendly.hint });
+    }
+    res.json({
+      ok: true,
+      key,
+      publicUrl: publicUrlFor(cfg, key),
+      contentType,
+    });
+  });
+
+  router.delete("/api/departments/:dept/storage/objects", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    const cfg = await readStorageConfig(dept);
+    if (!cfg) throw notFound("storage not configured");
+    const key = req.query.key || "";
+    assertUnderPrefix(key, cfg.publicPrefix, cfg.privatePrefix);
+    try {
+      await deleteObject(cfg, key);
+    } catch (e) {
+      const friendly = translateError(e);
+      throw badRequest(friendly.message, { code: friendly.code, hint: friendly.hint });
+    }
+    res.json({ ok: true });
+  });
+
+  router.get("/api/departments/:dept/storage/objects/url", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    const cfg = await readStorageConfig(dept);
+    if (!cfg) throw notFound("storage not configured");
+    const key = req.query.key || "";
+    assertUnderPrefix(key, cfg.publicPrefix, cfg.privatePrefix);
+    const mode = req.query.mode === "signed" ? "signed" : "public";
+    const ttl = Math.max(30, Math.min(3600 * 24, Number(req.query.ttl || 600)));
+    if (mode === "public") {
+      const url = publicUrlFor(cfg, key);
+      if (!url) {
+        throw badRequest("no public URL for this key", { code: "NoPublicUrl" });
+      }
+      res.json({ url, mode: "public" });
+      return;
+    }
+    try {
+      const url = await presignGet(cfg, key, ttl);
+      res.json({ url, mode: "signed", expiresIn: ttl });
+    } catch (e) {
+      const friendly = translateError(e);
+      throw badRequest(friendly.message, { code: friendly.code, hint: friendly.hint });
+    }
+  });
+}

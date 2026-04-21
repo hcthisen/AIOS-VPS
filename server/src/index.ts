@@ -8,6 +8,7 @@ import { registerVpsSetupRoutes } from "./routes/vps-setup";
 import { registerProviderAuthRoutes } from "./routes/provider-auth";
 import { registerOnboardingRoutes } from "./routes/github";
 import { registerDashboardRoutes } from "./routes/dashboard";
+import { registerStorageRoutes } from "./routes/storage";
 import { attachTerminal } from "./terminal";
 import { startHeartbeat } from "./services/heartbeat";
 
@@ -21,6 +22,7 @@ async function main() {
   registerProviderAuthRoutes(router);
   registerOnboardingRoutes(router);
   registerDashboardRoutes(router);
+  registerStorageRoutes(router);
 
   const server = createHttpServer(router, { uiDir: config.uiDir });
   attachTerminal(server);
