@@ -58,6 +58,10 @@ async function contextPaths(deptName: string): Promise<string[]> {
   return [join(d.path, "CLAUDE.md"), join(d.path, "AGENTS.md")];
 }
 
+export async function storageInstructionPaths(deptName: string): Promise<string[]> {
+  return contextPaths(deptName);
+}
+
 export async function applyInstructions(deptName: string): Promise<boolean> {
   const paths = await contextPaths(deptName);
   const changed = await Promise.all(

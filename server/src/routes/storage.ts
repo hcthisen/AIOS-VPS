@@ -9,6 +9,7 @@ import {
   applyInstructions,
   clearInstructions,
   resetInstructionsToDefaults,
+  storageInstructionPaths,
 } from "../services/storageInstructions";
 import {
   StorageConfig,
@@ -30,6 +31,7 @@ import {
 import { probe } from "../services/storageProbe";
 import { buildPublicObjectUrl, encodePublicPath, probePublicBaseUrl } from "../services/publicBaseUrl";
 import { syncManagedCaddy } from "../services/caddy";
+import { commitRepoPaths } from "../services/repo";
 
 // Serialize concurrent writes per department so a second POST /config can't
 // race ahead of an in-flight probe+write.
@@ -96,6 +98,14 @@ export async function collectObjectListing(
 
 export function publicUrlFor(cfg: StorageConfig, key: string): string | undefined {
   return buildPublicObjectUrl(cfg.publicBaseUrl, key, cfg.publicPrefix);
+}
+
+async function commitStorageInstructionChanges(
+  dept: string,
+  message: string,
+): Promise<string | null> {
+  const paths = await storageInstructionPaths(dept);
+  return commitRepoPaths(paths, message);
 }
 
 export function registerStorageRoutes(router: Router) {
@@ -171,6 +181,13 @@ export function registerStorageRoutes(router: Router) {
       await writeStorageConfig(dept, cfg);
       await applyInstructions(dept);
       await syncManagedCaddy();
+      await commitStorageInstructionChanges(dept, `aios: storage instructions for ${dept}`).catch((e) => {
+        log.warn("storage prompt commit failed", {
+          dept,
+          error: String((e as any)?.message || e),
+        });
+        return null;
+      });
       log.info("storage configured", {
         dept,
         endpoint: cfg.endpoint,
@@ -187,6 +204,13 @@ export function registerStorageRoutes(router: Router) {
       await clearStorageConfig(dept);
       await clearInstructions(dept);
       await syncManagedCaddy();
+      await commitStorageInstructionChanges(dept, `aios: remove storage instructions for ${dept}`).catch((e) => {
+        log.warn("storage prompt commit failed", {
+          dept,
+          error: String((e as any)?.message || e),
+        });
+        return null;
+      });
       log.info("storage disconnected", { dept });
     });
     res.json({ ok: true });
@@ -196,6 +220,15 @@ export function registerStorageRoutes(router: Router) {
     await guard(req, res);
     const dept = req.params.dept;
     const changed = await resetInstructionsToDefaults(dept);
+    if (changed) {
+      await commitStorageInstructionChanges(dept, `aios: reset storage instructions for ${dept}`).catch((e) => {
+        log.warn("storage prompt commit failed", {
+          dept,
+          error: String((e as any)?.message || e),
+        });
+        return null;
+      });
+    }
     res.json({ ok: true, changed });
   });
 

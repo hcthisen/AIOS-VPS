@@ -1,10 +1,11 @@
 // Repo management: clone/pull, scaffold new repo, validate aios.yaml.
 
+import { randomBytes } from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { mkdir, writeFile, readFile, stat } from "fs/promises";
+import { mkdir, writeFile, readFile, stat, rm } from "fs/promises";
 import { existsSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, relative, resolve, sep } from "path";
 import matter from "gray-matter";
 
 import { config } from "../config";
@@ -38,16 +39,83 @@ export async function gitRun(args: string[], cwd = config.repoDir, env: NodeJS.P
   return execFileAsync("git", args, { cwd, env });
 }
 
+function repoPathspecs(paths: string[]): string[] {
+  const repoRoot = resolve(config.repoDir);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of paths) {
+    const abs = resolve(repoRoot, raw);
+    const rel = relative(repoRoot, abs);
+    if (!rel || rel === "" || rel.startsWith("..") || resolve(repoRoot, rel) !== abs) continue;
+    const spec = rel.split(sep).join("/");
+    if (seen.has(spec)) continue;
+    seen.add(spec);
+    out.push(spec);
+  }
+  return out;
+}
+
+export async function commitRepoPaths(paths: string[], message: string): Promise<string | null> {
+  const pathspecs = repoPathspecs(paths);
+  if (!pathspecs.length) return null;
+
+  const { stdout: status } = await gitRun(["status", "--porcelain", "--", ...pathspecs]);
+  if (!status.trim()) return null;
+
+  const tmpDir = join(config.dataDir, "tmp");
+  await mkdir(tmpDir, { recursive: true });
+  const tmpIndex = join(tmpDir, `git-index-${Date.now()}-${randomBytes(4).toString("hex")}`);
+  const tempEnv = {
+    ...buildGitEnv(),
+    GIT_INDEX_FILE: tmpIndex,
+  };
+
+  try {
+    try {
+      await gitRun(["rev-parse", "--verify", "HEAD"], config.repoDir, tempEnv);
+      await gitRun(["read-tree", "HEAD"], config.repoDir, tempEnv);
+    } catch {
+      // Empty repository; commit from an empty temporary index.
+    }
+
+    await gitRun(["add", "--", ...pathspecs], config.repoDir, tempEnv);
+    const { stdout: staged } = await gitRun(["diff", "--cached", "--name-only", "--", ...pathspecs], config.repoDir, tempEnv);
+    if (!staged.trim()) return null;
+
+    await gitRun(["commit", "-m", message], config.repoDir, tempEnv);
+    await gitRun(["add", "--", ...pathspecs]).catch(() => {});
+    await gitRun(["push", "origin", "HEAD"]).catch(() => {});
+    const { stdout: head } = await gitRun(["rev-parse", "HEAD"]);
+    return head.trim();
+  } finally {
+    await rm(tmpIndex, { force: true }).catch(() => {});
+  }
+}
+
 function buildGitEnv(): NodeJS.ProcessEnv {
   const creds = getGithubCreds();
   const env = buildCommonAuthEnv();
+  const gitName = process.env.GIT_AUTHOR_NAME
+    || process.env.GIT_COMMITTER_NAME
+    || creds?.username
+    || "AIOS";
+  const gitEmail = process.env.GIT_AUTHOR_EMAIL
+    || process.env.GIT_COMMITTER_EMAIL
+    || (creds?.username ? `${creds.username}@users.noreply.github.com` : "aios@local.invalid");
+  const gitEnv: NodeJS.ProcessEnv = {
+    ...env,
+    GIT_AUTHOR_NAME: gitName,
+    GIT_AUTHOR_EMAIL: gitEmail,
+    GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || gitName,
+    GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || gitEmail,
+  };
   if (creds?.mode === "deploy_key" && creds.privateKeyPath) {
     return {
-      ...env,
+      ...gitEnv,
       GIT_SSH_COMMAND: `ssh -i "${creds.privateKeyPath}" -o StrictHostKeyChecking=accept-new`,
     };
   }
-  return env;
+  return gitEnv;
 }
 
 export async function cloneRepo(input: {

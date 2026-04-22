@@ -5,7 +5,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 import { config } from "../config";
-import { mergeStoredCredentials } from "./storageConfig";
+import { mergeStoredCredentials, readStorageConfig, writeStorageConfig } from "./storageConfig";
 
 describe("mergeStoredCredentials", () => {
   let tempRoot = "";
@@ -51,5 +51,27 @@ describe("mergeStoredCredentials", () => {
     });
     assert.equal(merged.accessKeyId, "fresh-access");
     assert.equal(merged.secretAccessKey, "fresh-secret");
+  });
+
+  it("creates a missing .env when saving storage config", async () => {
+    await rm(join(tempRoot, "sample", ".env"), { force: true });
+
+    await writeStorageConfig("sample", {
+      endpoint: "https://s3.example.test",
+      region: "auto",
+      bucket: "assets-bucket",
+      accessKeyId: "fresh-access",
+      secretAccessKey: "fresh-secret",
+      publicBaseUrl: "https://files.example.test/public",
+      publicPrefix: "public/",
+      privatePrefix: "private/",
+    });
+
+    const stored = await readStorageConfig("sample");
+    assert.equal(stored?.endpoint, "https://s3.example.test");
+    assert.equal(stored?.bucket, "assets-bucket");
+    assert.equal(stored?.accessKeyId, "fresh-access");
+    assert.equal(stored?.secretAccessKey, "fresh-secret");
+    assert.equal(stored?.publicBaseUrl, "https://files.example.test/public");
   });
 });
