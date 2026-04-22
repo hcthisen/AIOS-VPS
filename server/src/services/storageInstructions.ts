@@ -46,6 +46,7 @@ Credentials are in .env as AIOS_STORAGE_* variables.
 - For public files, print the full public URL only when \`AIOS_STORAGE_PUBLIC_BASE_URL\` is configured; otherwise print the full \`s3://bucket/key\` path.
 - For private files, always print the full \`s3://bucket/key\` path.
 - AIOS captures this and surfaces it in the run log.
+- When a public base URL is configured, AIOS verifies that uploaded public links are actually reachable before accepting the setting.
 - Bucket CORS is usually unnecessary for current AIOS flows because uploads go through AIOS and private previews use signed URLs.
 - Do not embed credentials in prompts or commit them to the repo.`;
 }

@@ -13,6 +13,7 @@ import {
   translateError,
 } from "./storageClient";
 import { StorageConfig } from "./storageConfig";
+import type { PublicBaseUrlCheck } from "./publicBaseUrl";
 
 export interface ProbeResult {
   ok: boolean;
@@ -22,6 +23,7 @@ export interface ProbeResult {
   objectCount: number;
   error?: FriendlyError;
   warnings?: string[];
+  publicUrl?: PublicBaseUrlCheck;
 }
 
 export async function probe(cfg: StorageConfig): Promise<ProbeResult> {

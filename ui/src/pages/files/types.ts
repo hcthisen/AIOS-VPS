@@ -36,6 +36,12 @@ export interface ProbeResult {
   objectCount: number;
   error?: ProbeError;
   warnings?: string[];
+  publicUrl?: {
+    ok: boolean;
+    mode: "aios" | "external";
+    url: string;
+    detail: string;
+  };
 }
 
 export interface FolderEntry {

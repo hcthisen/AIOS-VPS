@@ -11,6 +11,7 @@ import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerStorageRoutes } from "./routes/storage";
 import { attachTerminal } from "./terminal";
 import { startHeartbeat } from "./services/heartbeat";
+import { maybeServePublicObject } from "./services/publicBaseUrl";
 
 async function main() {
   const router = new Router();
@@ -24,7 +25,10 @@ async function main() {
   registerDashboardRoutes(router);
   registerStorageRoutes(router);
 
-  const server = createHttpServer(router, { uiDir: config.uiDir });
+  const server = createHttpServer(router, {
+    uiDir: config.uiDir,
+    onMiss: maybeServePublicObject,
+  });
   attachTerminal(server);
 
   server.listen(config.port, config.host, () => {

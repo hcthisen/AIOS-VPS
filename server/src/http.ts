@@ -21,6 +21,7 @@ export interface AiosResponse extends ServerResponse {
 }
 
 export type Handler = (req: AiosRequest, res: AiosResponse) => Promise<void> | void;
+export type MissHandler = (req: AiosRequest, res: AiosResponse) => Promise<boolean> | boolean;
 
 interface Route { method: string; pattern: RegExp; keys: string[]; handler: Handler; }
 
@@ -147,7 +148,7 @@ async function parseRequest(req: IncomingMessage): Promise<AiosRequest> {
   return areq;
 }
 
-export function createHttpServer(router: Router, opts: { uiDir?: string } = {}): Server {
+export function createHttpServer(router: Router, opts: { uiDir?: string; onMiss?: MissHandler } = {}): Server {
   return createServer(async (req, res) => {
     const ares = decorate(res);
     let areq: AiosRequest;
@@ -162,6 +163,10 @@ export function createHttpServer(router: Router, opts: { uiDir?: string } = {}):
     try {
       const handled = await router.handle(areq, ares);
       if (handled) return;
+      if (opts.onMiss) {
+        const missHandled = await opts.onMiss(areq, ares);
+        if (missHandled || ares.writableEnded) return;
+      }
       // Fall through to static UI for non-API GET requests.
       if (req.method === "GET" && !areq.path.startsWith("/api/") && opts.uiDir) {
         await serveStatic(opts.uiDir, areq.path, ares);

@@ -1,64 +1,14 @@
 import { promises as dnsAsync } from "dns";
 import { execFile } from "child_process";
-import { promisify } from "util";
-import { writeFile, mkdir } from "fs/promises";
-import { dirname } from "path";
 
 import { Router, badRequest, forbidden } from "../http";
 import { config, saveConfig } from "../config";
 import { advanceSetupPhase, getSetupPhase, setSetupPhase } from "../setup-phase";
 import { adminOnly } from "../auth";
 import { log } from "../log";
-
-const execFileAsync = promisify(execFile);
+import { detectPublicIp, syncManagedCaddy } from "../services/caddy";
 
 const DOMAIN_RE = /^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$/i;
-
-async function detectPublicIp(): Promise<string> {
-  const sources = [
-    ["curl", ["-4", "-sf", "--max-time", "5", "https://icanhazip.com"]] as const,
-    ["curl", ["-4", "-sf", "--max-time", "5", "https://ifconfig.me"]] as const,
-  ];
-  for (const [bin, args] of sources) {
-    try {
-      const { stdout } = await execFileAsync(bin, [...args]);
-      const ip = stdout.trim();
-      if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return ip;
-    } catch { /* try next */ }
-  }
-  // Last-resort: hostname -I
-  try {
-    const { stdout } = await execFileAsync("hostname", ["-I"]);
-    const first = stdout.trim().split(/\s+/)[0];
-    if (first) return first;
-  } catch {}
-  return "unknown";
-}
-
-async function writeCaddyfile(domain: string, port: number) {
-  const body = `# Managed by AIOS VPS setup. Manual edits will be overwritten.
-${domain} {
-    reverse_proxy localhost:${port}
-}
-`;
-  const path = "/etc/caddy/Caddyfile";
-  try {
-    await writeFile(path, body, "utf-8");
-  } catch (e: any) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error(`unable to write ${path}: ${e?.message || e}`);
-    }
-    // In local dev without /etc/caddy, fall back to a data-dir copy for tests.
-    const fallback = `${config.dataDir}/Caddyfile.dev`;
-    await mkdir(dirname(fallback), { recursive: true });
-    await writeFile(fallback, body, "utf-8");
-    log.warn(`caddyfile: wrote dev fallback at ${fallback} (${e?.code || e})`);
-  }
-}
-
-async function sudoSystemctl(verb: string, unit: string) {
-  await execFileAsync("/usr/bin/sudo", ["/usr/bin/systemctl", verb, unit]);
-}
 
 export function registerVpsSetupRoutes(router: Router) {
   const guard = adminOnly();
@@ -93,19 +43,16 @@ export function registerVpsSetupRoutes(router: Router) {
     const alreadyConfigured = config.auth.domain === domain
       && config.auth.baseUrlMode === "explicit";
 
-    // 1. Caddyfile
-    await writeCaddyfile(domain, config.port);
-
-    // 2. Bring Caddy up only if the config was written successfully.
+    // 1. Bring Caddy up with the dashboard domain plus any storage-public
+    //    domains that already belong to this VPS.
     try {
-      await sudoSystemctl("enable", "caddy");
-      await sudoSystemctl("restart", "caddy");
+      await syncManagedCaddy([domain]);
     } catch (e: any) {
       log.warn(`caddy: systemctl failed (${e?.message || e})`);
       throw new Error(`Caddy failed to apply ${domain}: ${e?.message || e}`);
     }
 
-    // 3. Update our config with the public URL
+    // 2. Update our config with the public URL
     saveConfig({
       ...config,
       auth: {
@@ -115,10 +62,11 @@ export function registerVpsSetupRoutes(router: Router) {
         domain,
       },
     });
+    await syncManagedCaddy();
 
     if (getSetupPhase() === "domain_setup") advanceSetupPhase("domain_setup");
 
-    // 4. Self-restart after the response flushes so the next request lands on a
+    // 3. Self-restart after the response flushes so the next request lands on a
     //    process that knows its public URL. No restart if we were already on
     //    the same domain — config edit is a no-op.
     if (!alreadyConfigured) {
@@ -161,6 +109,7 @@ export function registerVpsSetupRoutes(router: Router) {
       ...config,
       auth: { ...config.auth, domain: "skipped" },
     });
+    await syncManagedCaddy();
     if (getSetupPhase() === "domain_setup") setSetupPhase("provider_setup");
     res.json({ ok: true, setupPhase: getSetupPhase() });
   });

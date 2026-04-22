@@ -57,7 +57,7 @@ export function FilesTab({
     return (
       <Section
         title="Connect file storage"
-        description="Point this department at an S3-compatible bucket. Credentials save to .env; a ‘File storage’ section is appended to both CLAUDE.md and AGENTS.md so the agent knows how to use it. Bucket CORS is usually unnecessary for current AIOS flows."
+        description="Point this department at an S3-compatible bucket. Credentials save to .env; a ‘File storage’ section is appended to both CLAUDE.md and AGENTS.md so the agent knows how to use it. AIOS verifies configured public URLs before saving them and can self-host them on this VPS when the hostname points here. Bucket CORS is usually unnecessary for current AIOS flows."
       >
         <StorageSetup
           deptName={deptName}

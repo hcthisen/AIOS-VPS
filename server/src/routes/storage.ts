@@ -28,6 +28,8 @@ import {
   translateError,
 } from "../services/storageClient";
 import { probe } from "../services/storageProbe";
+import { buildPublicObjectUrl, encodePublicPath, probePublicBaseUrl } from "../services/publicBaseUrl";
+import { syncManagedCaddy } from "../services/caddy";
 
 // Serialize concurrent writes per department so a second POST /config can't
 // race ahead of an in-flight probe+write.
@@ -67,7 +69,7 @@ function resolvePrefix(visibility: string, cfg: StorageConfig, sub: string): str
 }
 
 export function encodeObjectPath(path: string): string {
-  return path.split("/").map((part) => encodeURIComponent(part)).join("/");
+  return encodePublicPath(path);
 }
 
 export async function collectObjectListing(
@@ -93,10 +95,7 @@ export async function collectObjectListing(
 }
 
 export function publicUrlFor(cfg: StorageConfig, key: string): string | undefined {
-  if (!cfg.publicBaseUrl) return undefined;
-  if (!key.startsWith(cfg.publicPrefix)) return undefined;
-  const tail = key.slice(cfg.publicPrefix.length);
-  return `${cfg.publicBaseUrl}/${encodeObjectPath(tail)}`;
+  return buildPublicObjectUrl(cfg.publicBaseUrl, key, cfg.publicPrefix);
 }
 
 export function registerStorageRoutes(router: Router) {
@@ -121,6 +120,14 @@ export function registerStorageRoutes(router: Router) {
       throw badRequest((e as Error).message);
     }
     const result = await probe(cfg);
+    if (result.ok && cfg.publicBaseUrl) {
+      const publicCheck = await probePublicBaseUrl(dept, cfg);
+      if (publicCheck?.info) result.publicUrl = publicCheck.info;
+      if (publicCheck && !publicCheck.ok) {
+        result.ok = false;
+        result.error = publicCheck.error;
+      }
+    }
     log.info("storage probe", {
       dept,
       endpoint: cfg.endpoint,
@@ -151,8 +158,19 @@ export function registerStorageRoutes(router: Router) {
           result,
         });
       }
+      const publicCheck = await probePublicBaseUrl(dept, cfg);
+      if (publicCheck?.info) result.publicUrl = publicCheck.info;
+      if (publicCheck && !publicCheck.ok) {
+        throw badRequest(publicCheck.error?.message || "public URL probe failed", {
+          code: publicCheck.error?.code || "PublicBaseUrlFailed",
+          hint: publicCheck.error?.hint,
+          error: publicCheck.error,
+          publicUrl: publicCheck.info,
+        });
+      }
       await writeStorageConfig(dept, cfg);
       await applyInstructions(dept);
+      await syncManagedCaddy();
       log.info("storage configured", {
         dept,
         endpoint: cfg.endpoint,
@@ -168,6 +186,7 @@ export function registerStorageRoutes(router: Router) {
     await withDeptLock(dept, async () => {
       await clearStorageConfig(dept);
       await clearInstructions(dept);
+      await syncManagedCaddy();
       log.info("storage disconnected", { dept });
     });
     res.json({ ok: true });

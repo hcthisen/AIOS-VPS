@@ -74,6 +74,7 @@ export function translateError(err: unknown): FriendlyError {
         hint: "Ensure the key policy grants s3:ListBucket, PutObject, GetObject, DeleteObject.",
       };
     case "NotFound":
+    case "NoSuchKey":
       return {
         code: "NotFound",
         message: "Resource not found.",

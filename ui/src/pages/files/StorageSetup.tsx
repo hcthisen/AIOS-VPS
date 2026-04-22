@@ -118,7 +118,7 @@ export function StorageSetup({ deptName, initial, existing, onSaved, onCancel }:
             placeholder={existing?.configured ? "(unchanged)" : ""}
           />
         </Field>
-        <Field label="Public base URL" hint="Scheme is optional; AIOS defaults to https://. Bucket CORS is usually unnecessary because uploads go through AIOS and private previews use signed URLs.">
+        <Field label="Public base URL" hint="Scheme is optional; AIOS defaults to https://. AIOS now verifies that public links really work; if the hostname points to this VPS, AIOS will also configure Caddy/TLS for it. Bucket CORS is usually unnecessary because uploads go through AIOS and private previews use signed URLs.">
           <input
             value={form.publicBaseUrl}
             onChange={(e) => update("publicBaseUrl", e.target.value)}
@@ -140,6 +140,13 @@ export function StorageSetup({ deptName, initial, existing, onSaved, onCancel }:
           Connection OK. Bucket has {probe.objectCount} object{probe.objectCount === 1 ? "" : "s"}.
           Read, write, and delete permissions confirmed
           {probe.deleteOk ? "" : " (delete failed — see warnings)"}.
+          {probe.publicUrl ? (
+            <div className="small" style={{ marginTop: 4 }}>
+              Public URL verified via {probe.publicUrl.mode === "aios" ? "AIOS on this VPS" : "the configured public origin"}:
+              {" "}
+              <code>{probe.publicUrl.url}</code>
+            </div>
+          ) : null}
           {probe.warnings?.length ? (
             <div className="small" style={{ marginTop: 4 }}>
               {probe.warnings.map((w, i) => <div key={i}>{w}</div>)}
