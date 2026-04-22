@@ -13,6 +13,7 @@ import {
   buildAnthropicAuthEnv, buildOpenAiAuthEnv,
   anthropicAuthDetected, codexAuthDetected,
 } from "./provider-auth";
+import { readEnvFile, toMap } from "./envFile";
 import { Run, createRun, updateRun, runEvents, popBacklog, enqueueBacklog, getRun } from "./runs";
 import { claimDepartments, releaseClaimsForRun, expireStaleClaims } from "./claims";
 import { gitRun } from "./repo";
@@ -58,6 +59,40 @@ async function pickProvider(requested?: Provider): Promise<Provider> {
 
 function buildEnv(provider: Provider): NodeJS.ProcessEnv {
   return provider === "claude-code" ? buildAnthropicAuthEnv() : buildOpenAiAuthEnv();
+}
+
+function reservedEnvKeys(provider: Provider): string[] {
+  const common = ["HOME", "USERPROFILE", "PATH", "FORCE_COLOR", "NO_COLOR", "TERM"];
+  if (provider === "claude-code") {
+    return [...common, "CLAUDE_CONFIG_DIR", "CLAUDE_CREDENTIALS_PATH", "CLAUDE_LEGACY_CREDENTIALS_PATH"];
+  }
+  return [...common, "CODEX_HOME"];
+}
+
+export async function buildRunEnv(provider: Provider, cwd: string): Promise<NodeJS.ProcessEnv> {
+  const baseEnv = buildEnv(provider);
+  const envPath = join(cwd, ".env");
+  if (!existsSync(envPath)) return baseEnv;
+
+  const envEntries = await readEnvFile(envPath);
+  const fileEnv = toMap(envEntries);
+  const merged: NodeJS.ProcessEnv = { ...baseEnv, ...fileEnv };
+  for (const key of reservedEnvKeys(provider)) {
+    const value = baseEnv[key];
+    if (typeof value === "undefined") delete merged[key];
+    else merged[key] = value;
+  }
+
+  const storageAccessKey = merged.AIOS_STORAGE_ACCESS_KEY_ID?.trim();
+  const storageSecretKey = merged.AIOS_STORAGE_SECRET_ACCESS_KEY?.trim();
+  const storageRegion = merged.AIOS_STORAGE_REGION?.trim();
+  if (storageAccessKey) merged.AWS_ACCESS_KEY_ID = storageAccessKey;
+  if (storageSecretKey) merged.AWS_SECRET_ACCESS_KEY = storageSecretKey;
+  if (storageRegion) {
+    merged.AWS_REGION = storageRegion;
+    merged.AWS_DEFAULT_REGION = storageRegion;
+  }
+  return merged;
 }
 
 function getCodexSandboxMode(): CodexSandboxMode {
@@ -128,7 +163,7 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
     return;
   }
 
-  const env = buildEnv(provider);
+  const env = await buildRunEnv(provider, cwd);
   const { bin, args, stdin } = cliArgs(provider, req.prompt);
 
   let child: ChildProcess;

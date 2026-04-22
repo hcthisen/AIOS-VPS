@@ -1,7 +1,13 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
 
-import { fromEnvMap, maskAccessKey, validateConfig } from "./storageConfig";
+import {
+  fromEnvMap,
+  maskAccessKey,
+  normalizeOptionalUrl,
+  normalizeUrl,
+  validateConfig,
+} from "./storageConfig";
 
 describe("storageConfig", () => {
   it("maskAccessKey redacts all but last 4", () => {
@@ -53,11 +59,33 @@ describe("storageConfig", () => {
     assert.equal(cfg.privatePrefix, "secret/");
   });
 
+  it("normalizes scheme-less URLs to https", () => {
+    assert.equal(normalizeUrl("s3.example.test", "endpoint"), "https://s3.example.test");
+    assert.equal(normalizeOptionalUrl("cdn.example.test/path/", "publicBaseUrl"), "https://cdn.example.test/path");
+  });
+
+  it("keeps explicit http URLs intact", () => {
+    assert.equal(normalizeUrl("http://minio.internal:9000/", "endpoint"), "http://minio.internal:9000");
+  });
+
   it("validateConfig rejects bad inputs", () => {
     assert.throws(() => validateConfig({ endpoint: "", bucket: "b", accessKeyId: "k", secretAccessKey: "s" }));
     assert.throws(() => validateConfig({ endpoint: "not-a-url", bucket: "b", accessKeyId: "k", secretAccessKey: "s" }));
     assert.throws(() => validateConfig({ endpoint: "https://x", bucket: "Bad_Name", accessKeyId: "k", secretAccessKey: "s" }));
     assert.throws(() => validateConfig({ endpoint: "https://x", bucket: "b", accessKeyId: "", secretAccessKey: "s" }));
     assert.throws(() => validateConfig({ endpoint: "https://x", bucket: "b", accessKeyId: "k", secretAccessKey: "" }));
+  });
+
+  it("fromEnvMap normalizes stored URLs", () => {
+    const cfg = fromEnvMap({
+      AIOS_STORAGE_ENDPOINT: "s3.example.test",
+      AIOS_STORAGE_BUCKET: "bucket-name",
+      AIOS_STORAGE_ACCESS_KEY_ID: "k",
+      AIOS_STORAGE_SECRET_ACCESS_KEY: "s",
+      AIOS_STORAGE_PUBLIC_BASE_URL: "cdn.example.test/assets/",
+    });
+    assert.ok(cfg);
+    assert.equal(cfg!.endpoint, "https://s3.example.test");
+    assert.equal(cfg!.publicBaseUrl, "https://cdn.example.test/assets");
   });
 });

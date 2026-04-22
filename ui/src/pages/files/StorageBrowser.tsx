@@ -85,8 +85,9 @@ export function StorageBrowser(props: Props) {
 
   const handleCopyUrl = async (f: FileEntry) => {
     try {
-      const mode = visibility === "public" ? "public" : "signed";
-      const ttl = visibility === "private" ? 3600 : undefined;
+      const wantsPublicUrl = visibility === "public" && !!existing.publicBaseUrl;
+      const mode = wantsPublicUrl ? "public" : "signed";
+      const ttl = mode === "signed" ? 3600 : undefined;
       const params = new URLSearchParams({ key: f.key, mode });
       if (ttl) params.set("ttl", String(ttl));
       const r = await api<{ url: string; mode: string; expiresIn?: number }>(
@@ -266,6 +267,7 @@ export function StorageBrowser(props: Props) {
                     file={f}
                     highlight={highlight === f.name}
                     visibility={visibility}
+                    allowSignedPreview={visibility === "private" || !existing.publicBaseUrl}
                     deptName={deptName}
                     onCopy={handleCopyUrl}
                     onDelete={handleDelete}
@@ -317,6 +319,7 @@ function FileCard({
   file,
   highlight,
   visibility,
+  allowSignedPreview,
   deptName,
   onCopy,
   onDelete,
@@ -324,6 +327,7 @@ function FileCard({
   file: FileEntry;
   highlight: boolean;
   visibility: Visibility;
+  allowSignedPreview: boolean;
   deptName: string;
   onCopy: (f: FileEntry) => void;
   onDelete: (f: FileEntry) => void;
@@ -334,7 +338,7 @@ function FileCard({
 
   useEffect(() => {
     if (!isImage) return;
-    if (visibility === "public") {
+    if (visibility === "public" && !allowSignedPreview) {
       setSignedUrl(file.publicUrl || null);
       return;
     }
@@ -345,7 +349,7 @@ function FileCard({
       .then((r) => { if (!cancelled) setSignedUrl(r.url); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [file.key, isImage, visibility]);
+  }, [allowSignedPreview, deptName, file.key, file.publicUrl, isImage, visibility]);
 
   return (
     <div className={`file-card${highlight ? " highlight" : ""}`}>

@@ -43,6 +43,34 @@ export const STORAGE_KEYS = [
 export const DEFAULT_PUBLIC_PREFIX = "public/";
 export const DEFAULT_PRIVATE_PREFIX = "private/";
 
+function withDefaultScheme(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+export function normalizeUrl(raw: string, field: string): string {
+  const candidate = withDefaultScheme(raw);
+  if (!candidate) throw new Error(`${field} is required`);
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error(`${field} must be a valid http(s) URL`);
+  }
+  if (!/^https?:$/i.test(parsed.protocol)) {
+    throw new Error(`${field} must start with http(s)://`);
+  }
+  return candidate.replace(/\/+$/, "");
+}
+
+export function normalizeOptionalUrl(raw: string, field: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return normalizeUrl(trimmed, field);
+}
+
 export async function deptEnvPath(deptName: string): Promise<string> {
   const depts = await listDepartments();
   const d = depts.find((x) => x.name === deptName);
@@ -69,12 +97,12 @@ export function fromEnvMap(map: Record<string, string>): StorageConfig | null {
   const secretAccessKey = (map.AIOS_STORAGE_SECRET_ACCESS_KEY || "").trim();
   if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) return null;
   return {
-    endpoint,
+    endpoint: normalizeUrl(endpoint, "endpoint"),
     region: (map.AIOS_STORAGE_REGION || "us-east-1").trim(),
     bucket,
     accessKeyId,
     secretAccessKey,
-    publicBaseUrl: (map.AIOS_STORAGE_PUBLIC_BASE_URL || "").trim(),
+    publicBaseUrl: normalizeOptionalUrl(map.AIOS_STORAGE_PUBLIC_BASE_URL || "", "publicBaseUrl"),
     publicPrefix: normalizePrefix(map.AIOS_STORAGE_PUBLIC_PREFIX, DEFAULT_PUBLIC_PREFIX),
     privatePrefix: normalizePrefix(map.AIOS_STORAGE_PRIVATE_PREFIX, DEFAULT_PRIVATE_PREFIX),
   };
@@ -113,22 +141,18 @@ export async function readStorageConfigPublic(deptName: string): Promise<Storage
 }
 
 export function validateConfig(input: Partial<StorageConfig>): StorageConfig {
-  const endpoint = (input.endpoint || "").trim();
+  const endpointRaw = (input.endpoint || "").trim();
   const bucket = (input.bucket || "").trim();
   const accessKeyId = (input.accessKeyId || "").trim();
   const secretAccessKey = (input.secretAccessKey || "").trim();
-  if (!endpoint) throw new Error("endpoint is required");
-  if (!/^https?:\/\//i.test(endpoint)) throw new Error("endpoint must start with http(s)://");
+  const endpoint = normalizeUrl(endpointRaw, "endpoint");
   if (!bucket) throw new Error("bucket is required");
   if (!/^[a-z0-9][a-z0-9.\-]{1,62}$/.test(bucket)) throw new Error("bucket name is invalid");
   if (!accessKeyId) throw new Error("accessKeyId is required");
   if (!secretAccessKey) throw new Error("secretAccessKey is required");
-  const publicBaseUrl = (input.publicBaseUrl || "").trim().replace(/\/+$/, "");
-  if (publicBaseUrl && !/^https?:\/\//i.test(publicBaseUrl)) {
-    throw new Error("publicBaseUrl must start with http(s)://");
-  }
+  const publicBaseUrl = normalizeOptionalUrl(input.publicBaseUrl || "", "publicBaseUrl");
   return {
-    endpoint: endpoint.replace(/\/+$/, ""),
+    endpoint,
     region: (input.region || "us-east-1").trim() || "us-east-1",
     bucket,
     accessKeyId,
@@ -158,15 +182,18 @@ export async function clearStorageConfig(deptName: string): Promise<void> {
   await mergeEnv(abs, {}, [...STORAGE_KEYS]);
 }
 
-// When the operator re-tests with the secret omitted (Settings drawer),
-// merge the stored secret back in so they don't have to re-type it.
-export async function mergeStoredSecret(
+// When the operator re-tests or re-saves with credentials omitted (Settings
+// drawer), merge the stored values back in so simple edits do not require
+// re-entering unchanged secrets.
+export async function mergeStoredCredentials(
   deptName: string,
   input: Partial<StorageConfig>,
 ): Promise<Partial<StorageConfig>> {
-  if (input.secretAccessKey && input.secretAccessKey.trim()) return input;
   const stored = await readStorageConfig(deptName);
   if (!stored) return input;
-  return { ...input, secretAccessKey: stored.secretAccessKey };
+  const next = { ...input };
+  if (!next.accessKeyId?.trim()) next.accessKeyId = stored.accessKeyId;
+  if (!next.secretAccessKey?.trim()) next.secretAccessKey = stored.secretAccessKey;
+  return next;
 }
 

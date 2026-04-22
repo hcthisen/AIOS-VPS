@@ -103,11 +103,17 @@ export async function probe(cfg: StorageConfig): Promise<ProbeResult> {
   }
 
   let deleteOk = true;
+  let deleteError: FriendlyError | undefined;
   try {
     await deleteObject(cfg, probeKey);
   } catch (e) {
     deleteOk = false;
     const friendly = translateError(e);
+    deleteError = {
+      code: "DeleteFailed",
+      message: "Delete permission is required for the Files tab.",
+      hint: friendly.hint || friendly.message,
+    };
     warnings.push(
       `Delete step failed (${friendly.code}): object ${probeKey} left behind. ` +
         (friendly.hint || friendly.message),
@@ -115,11 +121,12 @@ export async function probe(cfg: StorageConfig): Promise<ProbeResult> {
   }
 
   return {
-    ok: true,
+    ok: deleteOk,
     readOk: true,
     writeOk: true,
     deleteOk,
     objectCount,
+    error: deleteError,
     warnings: warnings.length ? warnings : undefined,
   };
 }

@@ -13,7 +13,7 @@ import {
 import {
   StorageConfig,
   clearStorageConfig,
-  mergeStoredSecret,
+  mergeStoredCredentials,
   readStorageConfig,
   readStorageConfigPublic,
   validateConfig,
@@ -21,6 +21,7 @@ import {
 } from "../services/storageConfig";
 import {
   deleteObject,
+  ListResult,
   listObjects,
   presignGet,
   streamingUpload,
@@ -65,11 +66,37 @@ function resolvePrefix(visibility: string, cfg: StorageConfig, sub: string): str
   return joined.endsWith("/") ? joined : `${joined}/`;
 }
 
-function publicUrlFor(cfg: StorageConfig, key: string): string | undefined {
+export function encodeObjectPath(path: string): string {
+  return path.split("/").map((part) => encodeURIComponent(part)).join("/");
+}
+
+export async function collectObjectListing(
+  fetchPage: (continuationToken?: string) => Promise<ListResult>,
+): Promise<ListResult> {
+  const prefixes = new Set<string>();
+  const objects: ListResult["objects"] = [];
+  let nextToken: string | undefined;
+  let keyCount = 0;
+  do {
+    const page = await fetchPage(nextToken);
+    for (const prefix of page.prefixes) prefixes.add(prefix);
+    objects.push(...page.objects);
+    keyCount += page.keyCount;
+    nextToken = page.nextToken;
+  } while (nextToken);
+  return {
+    prefixes: [...prefixes],
+    objects,
+    nextToken: undefined,
+    keyCount,
+  };
+}
+
+export function publicUrlFor(cfg: StorageConfig, key: string): string | undefined {
   if (!cfg.publicBaseUrl) return undefined;
   if (!key.startsWith(cfg.publicPrefix)) return undefined;
   const tail = key.slice(cfg.publicPrefix.length);
-  return `${cfg.publicBaseUrl}/${tail}`;
+  return `${cfg.publicBaseUrl}/${encodeObjectPath(tail)}`;
 }
 
 export function registerStorageRoutes(router: Router) {
@@ -86,7 +113,7 @@ export function registerStorageRoutes(router: Router) {
     await guard(req, res);
     const dept = req.params.dept;
     const body = (req.body || {}) as Partial<StorageConfig>;
-    const merged = await mergeStoredSecret(dept, body);
+    const merged = await mergeStoredCredentials(dept, body);
     let cfg: StorageConfig;
     try {
       cfg = validateConfig(merged);
@@ -108,7 +135,7 @@ export function registerStorageRoutes(router: Router) {
     await guard(req, res);
     const dept = req.params.dept;
     const body = (req.body || {}) as Partial<StorageConfig>;
-    const merged = await mergeStoredSecret(dept, body);
+    const merged = await mergeStoredCredentials(dept, body);
     let cfg: StorageConfig;
     try {
       cfg = validateConfig(merged);
@@ -164,15 +191,16 @@ export function registerStorageRoutes(router: Router) {
     const search = (req.query.search || "").toLowerCase();
     const sort = req.query.sort || "name";
     const order = req.query.order === "desc" ? "desc" : "asc";
-    const cursor = req.query.cursor || undefined;
 
     let listed;
     try {
-      listed = await listObjects(cfg, prefix, {
-        delimiter: "/",
-        maxKeys: 1000,
-        continuationToken: cursor,
-      });
+      listed = await collectObjectListing((continuationToken) =>
+        listObjects(cfg, prefix, {
+          delimiter: "/",
+          maxKeys: 1000,
+          continuationToken,
+        }),
+      );
     } catch (e) {
       const friendly = translateError(e);
       throw badRequest(friendly.message, { code: friendly.code, hint: friendly.hint });
@@ -213,7 +241,7 @@ export function registerStorageRoutes(router: Router) {
       prefix,
       folders,
       files,
-      nextCursor: listed.nextToken,
+      nextCursor: undefined,
     });
   });
 

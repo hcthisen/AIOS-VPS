@@ -62,7 +62,7 @@ export function RunDetail({ id, navigate }: { id: string; navigate: (t: string) 
   );
 }
 
-const URL_RE = /(https?:\/\/[^\s<>()"']+)/g;
+const FILE_REF_RE = /(https?:\/\/[^\s<>()"']+|s3:\/\/[^\s<>()"']+)/g;
 const FILES_HEADING_RE = /^(\s*)(Files produced:)\s*$/im;
 
 function renderLog(
@@ -97,15 +97,15 @@ function renderLine(
   storage: StoragePublic | null,
   navigate: (t: string) => void,
 ): React.ReactNode {
-  URL_RE.lastIndex = 0;
+  FILE_REF_RE.lastIndex = 0;
   const segments: React.ReactNode[] = [];
   let lastIdx = 0;
   let m: RegExpExecArray | null;
-  while ((m = URL_RE.exec(line))) {
+  while ((m = FILE_REF_RE.exec(line))) {
     if (m.index > lastIdx) segments.push(line.slice(lastIdx, m.index));
-    const url = m[0];
-    segments.push(<FileLink key={m.index} url={url} department={department} storage={storage} navigate={navigate} />);
-    lastIdx = m.index + url.length;
+    const ref = m[0];
+    segments.push(<FileLink key={m.index} refText={ref} department={department} storage={storage} navigate={navigate} />);
+    lastIdx = m.index + ref.length;
   }
   if (lastIdx < line.length) segments.push(line.slice(lastIdx));
   if (!segments.length) return line;
@@ -113,19 +113,22 @@ function renderLine(
 }
 
 function FileLink({
-  url,
+  refText,
   department,
   storage,
   navigate,
 }: {
-  url: string;
+  refText: string;
   department: string | undefined;
   storage: StoragePublic | null;
   navigate: (t: string) => void;
 }) {
-  const ref = toFilesHref(url, department, storage);
+  const ref = toFilesHref(refText, department, storage);
   if (!ref) {
-    return <a href={url} target="_blank" rel="noreferrer" className="log-files-link">{url}</a>;
+    if (/^https?:\/\//i.test(refText)) {
+      return <a href={refText} target="_blank" rel="noreferrer" className="log-files-link">{refText}</a>;
+    }
+    return <span>{refText}</span>;
   }
   return (
     <span
@@ -135,21 +138,71 @@ function FileLink({
         navigate(ref);
       }}
     >
-      {url}
+      {refText}
     </span>
   );
 }
 
-function toFilesHref(url: string, department: string | undefined, storage: StoragePublic | null): string | null {
+function toFilesHref(refText: string, department: string | undefined, storage: StoragePublic | null): string | null {
+  if (refText.startsWith("s3://")) return toFilesHrefFromS3(refText, department, storage);
+  return toFilesHrefFromPublicUrl(refText, department, storage);
+}
+
+function toFilesHrefFromPublicUrl(url: string, department: string | undefined, storage: StoragePublic | null): string | null {
   if (!department || !storage?.configured) return null;
   const base = storage.publicBaseUrl?.replace(/\/+$/, "");
-  if (!base || !url.startsWith(base + "/")) return null;
-  const keyTail = url.slice(base.length + 1);
+  if (!base) return null;
+  let baseUrl: URL;
+  let targetUrl: URL;
+  try {
+    baseUrl = new URL(base);
+    targetUrl = new URL(url);
+  } catch {
+    return null;
+  }
+  if (baseUrl.origin !== targetUrl.origin) return null;
+  const basePath = baseUrl.pathname.replace(/\/+$/, "");
+  const path = targetUrl.pathname;
+  if (!path.startsWith(`${basePath}/`) && path !== `${basePath}`) return null;
+  const keyTail = decodeObjectPath(path.slice(basePath ? basePath.length + 1 : 1));
+  if (!keyTail) return null;
+  return buildFilesHref(department, storage, "public", storage.publicPrefix + keyTail);
+}
+
+function toFilesHrefFromS3(refText: string, department: string | undefined, storage: StoragePublic | null): string | null {
+  if (!department || !storage?.configured) return null;
+  const match = refText.match(/^s3:\/\/([^/]+)\/(.+)$/);
+  if (!match) return null;
+  const [, bucket, rawKey] = match;
+  if (bucket !== storage.bucket) return null;
+  const key = decodeObjectPath(rawKey);
+  if (key.startsWith(storage.publicPrefix)) return buildFilesHref(department, storage, "public", key);
+  if (key.startsWith(storage.privatePrefix)) return buildFilesHref(department, storage, "private", key);
+  return null;
+}
+
+function buildFilesHref(
+  department: string,
+  storage: StoragePublic,
+  visibility: "public" | "private",
+  key: string,
+): string | null {
+  const root = visibility === "public" ? storage.publicPrefix : storage.privatePrefix;
+  if (!key.startsWith(root)) return null;
+  const keyTail = key.slice(root.length);
   const slash = keyTail.lastIndexOf("/");
   const prefix = slash >= 0 ? keyTail.slice(0, slash + 1) : "";
   const basename = slash >= 0 ? keyTail.slice(slash + 1) : keyTail;
-  const params = new URLSearchParams({ tab: "files", visibility: "public" });
+  const params = new URLSearchParams({ tab: "files", visibility });
   if (prefix) params.set("prefix", prefix);
   if (basename) params.set("highlight", basename);
   return `/departments/${encodeURIComponent(department)}?${params.toString()}`;
+}
+
+function decodeObjectPath(path: string): string {
+  try {
+    return path.split("/").map((part) => decodeURIComponent(part)).join("/");
+  } catch {
+    return path;
+  }
 }

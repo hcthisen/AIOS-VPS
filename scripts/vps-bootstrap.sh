@@ -48,8 +48,35 @@ log "installing base packages"
 apt-get update -qq
 apt-get install -y -qq \
   ca-certificates curl wget gnupg lsb-release \
-  git build-essential python3 ufw jq dnsutils rsync bubblewrap \
+  git build-essential python3 unzip ufw jq dnsutils rsync bubblewrap \
   debian-keyring debian-archive-keyring apt-transport-https
+
+AWSCLI_APT_CANDIDATE="$(apt-cache policy awscli 2>/dev/null | awk '/Candidate:/ { print $2; exit }')"
+
+if command -v aws >/dev/null 2>&1; then
+  log "AWS CLI already present"
+elif [[ -n "${AWSCLI_APT_CANDIDATE}" && "${AWSCLI_APT_CANDIDATE}" != "(none)" ]]; then
+  log "installing AWS CLI from apt"
+  apt-get install -y -qq awscli
+else
+  log "installing AWS CLI v2 from official bundle"
+  case "$(dpkg --print-architecture)" in
+    amd64) AWSCLI_ARCH="x86_64" ;;
+    arm64) AWSCLI_ARCH="aarch64" ;;
+    *)
+      AWSCLI_ARCH=""
+      warn "unsupported architecture for AWS CLI bundle: $(dpkg --print-architecture)"
+      ;;
+  esac
+  if [[ -n "${AWSCLI_ARCH}" ]]; then
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "${TMP_DIR}"' RETURN
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip" -o "${TMP_DIR}/awscliv2.zip"
+    (cd "${TMP_DIR}" && unzip -q awscliv2.zip && ./aws/install --update)
+    rm -rf "${TMP_DIR}"
+    trap - RETURN
+  fi
+fi
 
 # ---------- 2. Node.js LTS ----------
 if ! command -v node >/dev/null 2>&1 \
@@ -87,10 +114,6 @@ else
   log "Caddy already installed"
 fi
 
-# Caddy stays off until the dashboard writes its Caddyfile.
-systemctl stop caddy 2>/dev/null || true
-systemctl disable caddy 2>/dev/null || true
-
 # Seed a writable placeholder so the dashboard can rewrite it without root.
 install -d -m 0755 /etc/caddy
 if [[ ! -f /etc/caddy/Caddyfile ]]; then
@@ -102,6 +125,17 @@ EOF
 fi
 chown "${AIOS_USER}":"${AIOS_USER}" /etc/caddy/Caddyfile
 chmod 0644 /etc/caddy/Caddyfile
+
+# Keep Caddy off only while the placeholder config is still in place. On a
+# configured host, preserve the existing service state so re-running bootstrap
+# for package updates cannot take the public dashboard offline.
+if grep -Fq 'AIOS domain setup pending' /etc/caddy/Caddyfile; then
+  log "Caddy placeholder config detected; keeping Caddy disabled until domain setup"
+  systemctl stop caddy 2>/dev/null || true
+  systemctl disable caddy 2>/dev/null || true
+else
+  log "Caddy appears configured; preserving current service state"
+fi
 
 # Drop a reference template (never overwrites an operator-hand-edited one).
 if [[ ! -f /etc/caddy/Caddyfile.template ]]; then

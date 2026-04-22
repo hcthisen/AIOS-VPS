@@ -1,6 +1,6 @@
-// Manage the "## File storage" section in a department's CLAUDE.md. Uses the
-// generic managedSection utility so we can later add other auto-managed
-// sections without stomping operator edits.
+// Manage the "## File storage" section in a department's CLAUDE.md and
+// AGENTS.md. Uses the generic managedSection utility so we can later add other
+// auto-managed sections without stomping operator edits.
 
 import { join } from "path";
 
@@ -9,8 +9,6 @@ import {
   removeManagedSection,
   upsertManagedSection,
 } from "./managedSection";
-import { runSyncLayer } from "./sync";
-import { log } from "../log";
 
 const SECTION_ID = "storage";
 
@@ -34,45 +32,49 @@ Credentials are in .env as AIOS_STORAGE_* variables.
 - Always include a file extension matching the content type.
 - Organize by date folder so listings are chronologically scannable.
 
-**Reporting:**
-- At the end of any run that produced files, print a "Files produced:" section listing each full public URL (for public files) or S3 path (for private files).
-- AIOS captures this and surfaces it in the run log.
+**CLI environment:**
+- AIOS injects this department's \`.env\` into every run.
+- AIOS also maps \`AIOS_STORAGE_ACCESS_KEY_ID\` and \`AIOS_STORAGE_SECRET_ACCESS_KEY\` to \`AWS_ACCESS_KEY_ID\` and \`AWS_SECRET_ACCESS_KEY\`, and maps the region to \`AWS_REGION\` / \`AWS_DEFAULT_REGION\`.
 
 **Upload method:**
-- Use \`aws s3 cp\` or the department's preferred S3 client with credentials from .env.
+- Use \`aws s3 cp <local-file> "s3://$AIOS_STORAGE_BUCKET/<key>" --endpoint-url "$AIOS_STORAGE_ENDPOINT"\`.
+- Example public key: \`$AIOS_STORAGE_PUBLIC_PREFIXimages/2026-04-22/launch-hero.png\`
+- Example private key: \`$AIOS_STORAGE_PRIVATE_PREFIXreports/2026-04-22/qbr-draft.pdf\`
+
+**Reporting:**
+- At the end of any run that produced files, print a "Files produced:" section.
+- For public files, print the full public URL only when \`AIOS_STORAGE_PUBLIC_BASE_URL\` is configured; otherwise print the full \`s3://bucket/key\` path.
+- For private files, always print the full \`s3://bucket/key\` path.
+- AIOS captures this and surfaces it in the run log.
+- Bucket CORS is usually unnecessary for current AIOS flows because uploads go through AIOS and private previews use signed URLs.
 - Do not embed credentials in prompts or commit them to the repo.`;
 }
 
-async function contextPath(deptName: string): Promise<string> {
+async function contextPaths(deptName: string): Promise<string[]> {
   const depts = await listDepartments();
   const d = depts.find((x) => x.name === deptName);
   if (!d) throw new Error(`department not found: ${deptName}`);
-  return join(d.path, "CLAUDE.md");
-}
-
-function triggerSync(): void {
-  runSyncLayer({ commit: true }).catch((e: unknown) => {
-    log.warn("storage instructions: sync failed", (e as Error)?.message || e);
-  });
+  return [join(d.path, "CLAUDE.md"), join(d.path, "AGENTS.md")];
 }
 
 export async function applyInstructions(deptName: string): Promise<boolean> {
-  const abs = await contextPath(deptName);
-  const changed = await upsertManagedSection(abs, SECTION_ID, defaultInstructionsBody());
-  if (changed) triggerSync();
-  return changed;
+  const paths = await contextPaths(deptName);
+  const changed = await Promise.all(
+    paths.map((abs) => upsertManagedSection(abs, SECTION_ID, defaultInstructionsBody())),
+  );
+  return changed.some(Boolean);
 }
 
 export async function clearInstructions(deptName: string): Promise<boolean> {
-  const abs = await contextPath(deptName);
-  const changed = await removeManagedSection(abs, SECTION_ID);
-  if (changed) triggerSync();
-  return changed;
+  const paths = await contextPaths(deptName);
+  const changed = await Promise.all(paths.map((abs) => removeManagedSection(abs, SECTION_ID)));
+  return changed.some(Boolean);
 }
 
 export async function resetInstructionsToDefaults(deptName: string): Promise<boolean> {
-  const abs = await contextPath(deptName);
-  const changed = await upsertManagedSection(abs, SECTION_ID, defaultInstructionsBody());
-  if (changed) triggerSync();
-  return changed;
+  const paths = await contextPaths(deptName);
+  const changed = await Promise.all(
+    paths.map((abs) => upsertManagedSection(abs, SECTION_ID, defaultInstructionsBody())),
+  );
+  return changed.some(Boolean);
 }

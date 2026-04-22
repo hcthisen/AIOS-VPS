@@ -36,8 +36,9 @@ export function StorageSetup({ deptName, initial, existing, onSaved, onCancel }:
     setProbe(null);
   };
 
-  const canTest = form.endpoint.trim() && form.bucket.trim() && form.accessKeyId.trim()
-    && (form.secretAccessKey.trim() || !!existing?.configured);
+  const hasAccessKey = form.accessKeyId.trim() || !!existing?.configured;
+  const hasSecret = form.secretAccessKey.trim() || !!existing?.configured;
+  const canTest = form.endpoint.trim() && form.bucket.trim() && hasAccessKey && hasSecret;
 
   const handleTest = () =>
     run(
@@ -45,6 +46,7 @@ export function StorageSetup({ deptName, initial, existing, onSaved, onCancel }:
       async () => {
         setError(null);
         const payload: Partial<StorageFormState> = { ...form };
+        if (!payload.accessKeyId?.trim()) delete payload.accessKeyId;
         if (!payload.secretAccessKey?.trim()) delete payload.secretAccessKey;
         const result = await api<ProbeResult>(
           `/api/departments/${encodeURIComponent(deptName)}/storage/test`,
@@ -62,6 +64,7 @@ export function StorageSetup({ deptName, initial, existing, onSaved, onCancel }:
       async () => {
         setError(null);
         const payload: Partial<StorageFormState> = { ...form };
+        if (!payload.accessKeyId?.trim()) delete payload.accessKeyId;
         if (!payload.secretAccessKey?.trim()) delete payload.secretAccessKey;
         await api(
           `/api/departments/${encodeURIComponent(deptName)}/storage/config`,
@@ -77,9 +80,9 @@ export function StorageSetup({ deptName, initial, existing, onSaved, onCancel }:
       {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
 
       <div className="col" style={{ gap: 10 }}>
-        <Field label="Storage endpoint" hint="https://s3.eu-central-1.hetzner.com, https://<id>.r2.cloudflarestorage.com">
+        <Field label="Storage endpoint" hint="Scheme is optional; AIOS defaults to https://. Examples: s3.eu-central-1.hetzner.com, <id>.r2.cloudflarestorage.com">
           <input
-            placeholder="https://..."
+            placeholder="s3.example.com"
             value={form.endpoint}
             onChange={(e) => update("endpoint", e.target.value)}
           />
@@ -90,12 +93,16 @@ export function StorageSetup({ deptName, initial, existing, onSaved, onCancel }:
         <Field label="Bucket name">
           <input value={form.bucket} onChange={(e) => update("bucket", e.target.value)} />
         </Field>
-        <Field label="Access key ID">
+        <Field
+          label="Access key ID"
+          hint={existing?.configured ? "Leave blank to keep the stored access key." : ""}
+        >
           <input
             value={form.accessKeyId}
             onChange={(e) => update("accessKeyId", e.target.value)}
             autoComplete="off"
             spellCheck={false}
+            placeholder={existing?.configured ? existing.accessKeyIdMasked : ""}
           />
         </Field>
         <Field
@@ -111,11 +118,11 @@ export function StorageSetup({ deptName, initial, existing, onSaved, onCancel }:
             placeholder={existing?.configured ? "(unchanged)" : ""}
           />
         </Field>
-        <Field label="Public base URL" hint="e.g. https://bucket.r2.dev or a custom CDN domain">
+        <Field label="Public base URL" hint="Scheme is optional; AIOS defaults to https://. Bucket CORS is usually unnecessary because uploads go through AIOS and private previews use signed URLs.">
           <input
             value={form.publicBaseUrl}
             onChange={(e) => update("publicBaseUrl", e.target.value)}
-            placeholder="https://..."
+            placeholder="cdn.example.com"
           />
         </Field>
         <div className="row" style={{ gap: 12 }}>

@@ -19,7 +19,7 @@ sudo bash scripts/vps-bootstrap.sh
 After bootstrap:
 
 - `aios` user exists (`/home/aios`)
-- Node.js LTS, git, Caddy, `claude`, `codex` are installed
+- Node.js LTS, git, Caddy, `aws`, `claude`, `codex` are installed
 - Caddy is **stopped and disabled** (the dashboard starts it after domain setup)
 - systemd unit `/etc/systemd/system/aios.service` is installed but not yet started (no app code yet)
 - Narrow sudoers lets `aios` run exactly: `systemctl enable/start/reload caddy` and `systemctl restart aios`
