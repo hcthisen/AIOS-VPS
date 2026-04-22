@@ -514,6 +514,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
             <label className="col">
               <span className="small muted">Prompt</span>
               <textarea
+                className="prompt-input"
                 value={cronEditor.prompt}
                 onChange={(e) => setCronEditor({ ...cronEditor, prompt: e.target.value })}
                 placeholder="What should this task do?"
@@ -577,6 +578,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
             <label className="col">
               <span className="small muted">Prompt</span>
               <textarea
+                className="prompt-input"
                 value={goalEditor.prompt}
                 onChange={(e) => setGoalEditor({ ...goalEditor, prompt: e.target.value })}
                 placeholder="What outcome should this goal achieve?"

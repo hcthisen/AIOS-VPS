@@ -29,6 +29,16 @@ button, input, textarea, select {
   padding: 8px 12px;
   min-height: 36px;
 }
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='none' stroke='%238b94a0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M2.5 4.5l3.5 3.5 3.5-3.5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px;
+}
 button { cursor: pointer; }
 button.primary { background: var(--accent); color: #0b0d10; border-color: var(--accent); font-weight: 600; }
 button.danger  { background: var(--danger); border-color: var(--danger); color: #0b0d10; font-weight: 600; }
@@ -51,8 +61,16 @@ textarea { min-height: 120px; resize: vertical; }
   display: inline-flex; align-items: center; gap: 6px;
 }
 .icon-btn:hover { border-color: var(--accent-2); color: var(--accent-2); }
-.icon-btn.danger { color: var(--danger); }
-.icon-btn.danger:hover { border-color: var(--danger); }
+button.icon-btn.danger {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--danger);
+}
+button.icon-btn.danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #0b0d10;
+}
 
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .row.nowrap { flex-wrap: nowrap; }
@@ -128,10 +146,19 @@ textarea { min-height: 120px; resize: vertical; }
   padding: 14px 16px; border-bottom: 1px solid var(--border);
 }
 .drawer-header h3 { margin: 0; font-size: 15px; }
-.drawer-body { padding: 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; }
+.drawer-body { padding: 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px; }
+.drawer-body > label.col { gap: 6px; }
 .drawer-footer {
   padding: 12px 16px; border-top: 1px solid var(--border);
   display: flex; gap: 8px; justify-content: flex-end;
+}
+
+textarea.prompt-input {
+  min-height: 180px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
 }
 
 .panel { background: var(--panel); border-right: 1px solid var(--border); }
