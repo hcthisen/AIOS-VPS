@@ -511,7 +511,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                 <option value="codex">Codex</option>
               </select>
             </label>
-            <label className="col">
+            <label className="col drawer-fill">
               <span className="small muted">Prompt</span>
               <textarea
                 className="prompt-input"
@@ -575,7 +575,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                 <option value="codex">Codex</option>
               </select>
             </label>
-            <label className="col">
+            <label className="col drawer-fill">
               <span className="small muted">Prompt</span>
               <textarea
                 className="prompt-input"

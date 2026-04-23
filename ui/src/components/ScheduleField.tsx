@@ -82,14 +82,18 @@ function SimpleScheduleEditor({
   const time = formatTime(schedule.hour, schedule.minute);
 
   return (
-    <div className="grid-2">
-      <select value={schedule.kind} onChange={(e) => onChange({ kind: e.target.value as SimpleSchedule["kind"] })}>
+    <div className="grid-2 schedule-simple-grid">
+      <SelectField
+        label="Pattern"
+        value={schedule.kind}
+        onChange={(kind) => onChange({ kind: kind as SimpleSchedule["kind"] })}
+      >
         <option value="minute">Every n minutes</option>
         <option value="hour">Every n hours</option>
         <option value="day">Every n days</option>
         <option value="week">Weekly</option>
         <option value="month">Monthly</option>
-      </select>
+      </SelectField>
 
       {schedule.kind === "minute" && (
         <NumberField label="Interval" min={1} max={59} value={schedule.interval} onChange={(interval) => onChange({ interval })} suffix="minute(s)" />
@@ -111,11 +115,15 @@ function SimpleScheduleEditor({
 
       {schedule.kind === "week" && (
         <>
-          <select value={schedule.weekday} onChange={(e) => onChange({ weekday: Number(e.target.value) })}>
+          <SelectField
+            label="Day of week"
+            value={String(schedule.weekday)}
+            onChange={(weekday) => onChange({ weekday: Number(weekday) })}
+          >
             {Array.from({ length: 7 }).map((_, day) => (
               <option key={day} value={day}>{weekdayLabel(day)}</option>
             ))}
-          </select>
+          </SelectField>
           <TimeField value={time} onChange={(next) => onChange(parseTime(next))} />
         </>
       )}
@@ -128,6 +136,27 @@ function SimpleScheduleEditor({
         </>
       )}
     </div>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="col">
+      <span className="small muted">{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        {children}
+      </select>
+    </label>
   );
 }
 
@@ -149,7 +178,7 @@ function NumberField({
   return (
     <label className="col">
       <span className="small muted">{label}</span>
-      <div className="row">
+      <div className="row nowrap schedule-inline-field">
         <input
           type="number"
           min={min}
@@ -157,7 +186,7 @@ function NumberField({
           value={value}
           onChange={(e) => onChange(Number(e.target.value || min))}
         />
-        {suffix && <span className="small muted">{suffix}</span>}
+        {suffix && <span className="small muted schedule-inline-suffix">{suffix}</span>}
       </div>
     </label>
   );

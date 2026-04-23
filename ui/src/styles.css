@@ -146,19 +146,43 @@ button.icon-btn.danger:hover {
   padding: 14px 16px; border-bottom: 1px solid var(--border);
 }
 .drawer-header h3 { margin: 0; font-size: 15px; }
-.drawer-body { padding: 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px; }
+.drawer-body { padding: 16px; overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
 .drawer-body > label.col { gap: 6px; }
+.drawer-fill { flex: 1 1 auto; min-height: 0; }
 .drawer-footer {
   padding: 12px 16px; border-top: 1px solid var(--border);
   display: flex; gap: 8px; justify-content: flex-end;
 }
 
 textarea.prompt-input {
+  flex: 1 1 auto;
   min-height: 180px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 1.5;
   tab-size: 2;
+  resize: none;
+  overflow: auto;
+}
+
+.schedule-simple-grid {
+  align-items: start;
+}
+
+.schedule-inline-field {
+  align-items: center;
+}
+
+.schedule-inline-field > input,
+.schedule-inline-field > select {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.schedule-inline-suffix {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .panel { background: var(--panel); border-right: 1px solid var(--border); }
