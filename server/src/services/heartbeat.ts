@@ -8,6 +8,7 @@ import { listCronTasks, listGoals } from "./departments";
 import { startRun, isGlobalPaused } from "./executor";
 import { runSyncLayer } from "./sync";
 import { getSetupPhase } from "../setup-phase";
+import { isSystemUpdateBlocking } from "./systemUpdate";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 let heartbeatTimer: NodeJS.Timeout | null = null;
@@ -49,6 +50,7 @@ export function heartbeatStatus() {
 export async function runHeartbeatTick() {
   if (getSetupPhase() !== "complete") return; // nothing to do until onboarding is finished
   if (isGlobalPaused()) return;
+  if (await isSystemUpdateBlocking()) return;
 
   const pull = await pullRepo();
   if (!pull.ok) {

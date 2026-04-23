@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from "react";
+
 import { api } from "../api";
 import { Section } from "../components/Section";
+import { SystemUpdatePanel } from "../components/SystemUpdatePanel";
+import { ProviderAuth } from "./ProviderAuth";
+import { GithubSetup } from "./GithubSetup";
+import { NotificationsSetup } from "./NotificationsSetup";
 
 export function SettingsPage() {
   const [controls, setControls] = useState<any>(null);
   const [syncResult, setSyncResult] = useState<any>(null);
-  const [notif, setNotif] = useState<any>(null);
 
   const refresh = async () => {
     setControls(await api("/api/controls/status").catch(() => null));
-    setNotif(await api("/api/onboarding/notifications/config").catch(() => null));
   };
   useEffect(() => { refresh(); }, []);
 
@@ -21,9 +24,17 @@ export function SettingsPage() {
     <div className="col">
       <h2>Settings</h2>
 
+      <SystemUpdatePanel />
+
+      <ProviderAuth mode="settings" />
+
+      <GithubSetup mode="settings" basePath="/api/settings/github" />
+
+      <NotificationsSetup mode="settings" basePath="/api/settings/notifications" />
+
       <Section
         title="Controls"
-        description={`heartbeat ${controls?.heartbeat?.running ? "on" : "off"} \u00b7 active processes ${controls?.activeProcesses ?? 0} \u00b7 paused: ${String(!!controls?.paused)}`}
+        description={`heartbeat ${controls?.heartbeat?.running ? "on" : "off"} · active processes ${controls?.activeProcesses ?? 0} · paused: ${String(!!controls?.paused)}`}
       >
         <div className="row">
           <button onClick={runSync}>Run sync</button>
@@ -31,13 +42,6 @@ export function SettingsPage() {
           <button className="danger" onClick={killAll}>Kill all + pause</button>
         </div>
         {syncResult && <pre className="log small">{JSON.stringify(syncResult, null, 2)}</pre>}
-      </Section>
-
-      <Section
-        title="Notifications"
-        description={<>To change, run the onboarding notifications step again by POSTing to <code>/api/onboarding/notifications/save</code>.</>}
-      >
-        <pre className="code-block small">{JSON.stringify(notif || {}, null, 2)}</pre>
       </Section>
     </div>
   );

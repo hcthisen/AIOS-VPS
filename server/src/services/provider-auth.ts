@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import { spawn, spawnSync, ChildProcess } from "child_process";
 import { stat, readFile, mkdir, writeFile } from "fs/promises";
-import { join } from "path";
+import { delimiter, join } from "path";
 
 import { log } from "../log";
 
@@ -39,7 +39,7 @@ export function buildCommonAuthEnv(): NodeJS.ProcessEnv {
       "/usr/bin",
       "/bin",
       process.env.PATH || "",
-    ].filter(Boolean).join(":"),
+    ].filter(Boolean).join(delimiter),
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     TERM: "dumb",

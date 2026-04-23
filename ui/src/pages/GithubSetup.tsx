@@ -1,27 +1,53 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { api } from "../api";
 import { Section } from "../components/Section";
 import { Banner } from "../components/Banner";
 
-export function GithubSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
+export function GithubSetup({
+  onAdvance,
+  mode: pageMode = "onboarding",
+  basePath = "/api/onboarding/github",
+}: {
+  onAdvance?: () => Promise<void>;
+  mode?: "onboarding" | "settings";
+  basePath?: string;
+}) {
   const [mode, setMode] = useState<"pat" | "deploy_key">("pat");
   const [token, setToken] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [login, setLogin] = useState<string | null>(null);
+  const [connected, setConnected] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const advance = onAdvance || (async () => {});
+
+  const refresh = async () => {
+    try {
+      const status = await api(`${basePath}/status`);
+      setConnected(status);
+      setLogin(status?.username || null);
+      if (status?.mode === "deploy_key") setMode("deploy_key");
+    } catch {}
+  };
+
+  useEffect(() => {
+    refresh();
+  }, [basePath]);
 
   const connect = async () => {
     setBusy(true);
     setError(null);
     try {
       const body = mode === "pat" ? { mode, token } : { mode, privateKey };
-      const r = await api<{ login?: string }>("/api/onboarding/github/connect", {
+      const r = await api<{ login?: string }>(`${basePath}/connect`, {
         method: "POST",
         body: JSON.stringify(body),
       });
       setLogin(r.login || null);
-      await onAdvance();
+      setToken("");
+      setPrivateKey("");
+      await refresh();
+      if (pageMode === "onboarding") await advance();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -30,7 +56,12 @@ export function GithubSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
   };
 
   return (
-    <Section title="Connect GitHub">
+    <Section
+      title="Connect GitHub"
+      actions={connected?.connected
+        ? <span className="badge ok">{connected.mode === "deploy_key" ? "deploy key connected" : `@${connected.username}`}</span>
+        : <span className="badge">not connected</span>}
+    >
       <div className="row">
         <label className="row" style={{ gap: 6 }}>
           <input type="radio" checked={mode === "pat"} onChange={() => setMode("pat")} style={{ width: "auto", minHeight: 0 }} /> PAT
@@ -52,7 +83,7 @@ export function GithubSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
       )}
       <div className="row">
         <button className="primary" onClick={connect} disabled={busy || (mode === "pat" ? !token : !privateKey)}>
-          {busy ? "..." : "Connect"}
+          {busy ? "..." : connected?.connected ? "Reconnect" : "Connect"}
         </button>
         {login && <span className="badge ok">@{login}</span>}
       </div>

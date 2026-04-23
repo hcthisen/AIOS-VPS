@@ -28,18 +28,28 @@ type NotificationConfig =
   | { channel: "email"; from: string; to: string; smtpHost: string; smtpPort: number; smtpUser?: string; secure?: boolean }
   | { channel: "none" };
 
-export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
+export function NotificationsSetup({
+  onAdvance,
+  mode = "onboarding",
+  basePath = "/api/onboarding/notifications",
+}: {
+  onAdvance?: () => Promise<void>;
+  mode?: "onboarding" | "settings";
+  basePath?: string;
+}) {
   const [channel, setChannel] = useState<Channel>("telegram");
   const [tg, setTg] = useState({ botToken: "" });
   const [mail, setMail] = useState({ from: "", to: "", smtpHost: "", smtpPort: 587, smtpUser: "", smtpPass: "" });
   const [telegramReady, setTelegramReady] = useState(false);
   const [pairing, setPairing] = useState<TelegramPairingResponse | null>(null);
   const [saving, setSaving] = useState(false);
+  const [persisting, setPersisting] = useState(false);
   const [approvingChatId, setApprovingChatId] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tested, setTested] = useState<string | null>(null);
+  const advance = onAdvance || (async () => {});
 
   const pairedCandidate = useMemo(
     () => pairing?.candidates.find((candidate) => candidate.chatId === pairing.pairedChatId) || null,
@@ -47,7 +57,7 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
   );
 
   async function loadConfig() {
-    const config = await api<NotificationConfig>("/api/onboarding/notifications/config").catch(() => ({ channel: "telegram", chatId: null, paired: false } as NotificationConfig));
+    const config = await api<NotificationConfig>(`${basePath}/config`).catch(() => ({ channel: "telegram", chatId: null, paired: false } as NotificationConfig));
     if (config.channel === "telegram") {
       setChannel("telegram");
       setTelegramReady(true);
@@ -79,7 +89,7 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
 
   useEffect(() => {
     loadConfig().catch(() => {});
-  }, []);
+  }, [basePath]);
 
   useEffect(() => {
     if (channel !== "telegram" || !telegramReady) return;
@@ -87,7 +97,7 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
 
     const poll = async () => {
       try {
-        const next = await api<TelegramPairingResponse>("/api/onboarding/notifications/telegram/pairing");
+        const next = await api<TelegramPairingResponse>(`${basePath}/telegram/pairing`);
         if (!cancelled) {
           setPairing(next);
         }
@@ -104,14 +114,14 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [channel, telegramReady]);
+  }, [basePath, channel, telegramReady]);
 
   const saveTelegramBotToken = async () => {
     setSaving(true);
     setError(null);
     setTested(null);
     try {
-      const response = await api<{ ok: boolean; botName?: string; botUsername?: string }>("/api/onboarding/notifications/save", {
+      const response = await api<{ ok: boolean; botName?: string; botUsername?: string }>(`${basePath}/save`, {
         method: "POST",
         body: JSON.stringify({ channel: "telegram", botToken: tg.botToken }),
       });
@@ -132,14 +142,14 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
   };
 
   const saveEmail = async () => {
-    await api("/api/onboarding/notifications/save", {
+    await api(`${basePath}/save`, {
       method: "POST",
       body: JSON.stringify({ channel: "email", ...mail }),
     });
   };
 
   const saveNone = async () => {
-    await api("/api/onboarding/notifications/save", {
+    await api(`${basePath}/save`, {
       method: "POST",
       body: JSON.stringify({ channel: "none" }),
     });
@@ -150,11 +160,11 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
     setError(null);
     setTested(null);
     try {
-      await api("/api/onboarding/notifications/telegram/approve", {
+      await api(`${basePath}/telegram/approve`, {
         method: "POST",
         body: JSON.stringify({ chatId }),
       });
-      const next = await api<TelegramPairingResponse>("/api/onboarding/notifications/telegram/pairing");
+      const next = await api<TelegramPairingResponse>(`${basePath}/telegram/pairing`);
       setPairing(next);
     } catch (e: any) {
       setError(e.message);
@@ -176,7 +186,7 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
       } else if (channel === "none") {
         await saveNone();
       }
-      const response = await api<{ ok: boolean; error?: string }>("/api/onboarding/notifications/test", { method: "POST" });
+      const response = await api<{ ok: boolean; error?: string }>(`${basePath}/test`, { method: "POST" });
       setTested(response.ok ? "delivered" : response.error || "delivery failed");
     } catch (e: any) {
       setError(e.message);
@@ -201,11 +211,25 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
       } else {
         await saveNone();
       }
-      await onAdvance();
+      await advance();
     } catch (e: any) {
       setError(e.message);
     } finally {
       setFinishing(false);
+    }
+  };
+
+  const saveSettings = async () => {
+    setPersisting(true);
+    setError(null);
+    try {
+      if (channel === "email") await saveEmail();
+      else if (channel === "none") await saveNone();
+      await loadConfig();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setPersisting(false);
     }
   };
 
@@ -298,17 +322,32 @@ export function NotificationsSetup({ onAdvance }: { onAdvance: () => Promise<voi
       )}
 
       {channel === "none" && (
-        <div className="small muted">Notifications are disabled. You can configure them later in onboarding.</div>
+        <div className="small muted">Notifications are disabled.</div>
       )}
 
-      <div className="row">
-        <button onClick={test} disabled={testing || (channel === "telegram" && !pairing?.pairedChatId)}>
-          {testing ? "Sending..." : "Send test"}
-        </button>
-        <button className="primary" onClick={finish} disabled={finishing}>
-          {finishing ? "Finishing..." : "Finish setup"}
-        </button>
-      </div>
+      {mode === "onboarding" ? (
+        <div className="row">
+          <button onClick={test} disabled={testing || (channel === "telegram" && !pairing?.pairedChatId)}>
+            {testing ? "Sending..." : "Send test"}
+          </button>
+          <button className="primary" onClick={finish} disabled={finishing}>
+            {finishing ? "Finishing..." : "Finish setup"}
+          </button>
+        </div>
+      ) : (
+        <div className="row">
+          {channel !== "telegram" && (
+            <button className="primary" onClick={saveSettings} disabled={persisting}>
+              {persisting ? "Saving..." : "Save"}
+            </button>
+          )}
+          {channel !== "none" && (
+            <button onClick={test} disabled={testing || (channel === "telegram" && !pairing?.pairedChatId)}>
+              {testing ? "Sending..." : "Send test"}
+            </button>
+          )}
+        </div>
+      )}
 
       {tested && <Banner kind="ok" onDismiss={() => setTested(null)}>{tested}</Banner>}
       {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}

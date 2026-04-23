@@ -18,6 +18,7 @@ import { Run, createRun, updateRun, runEvents, popBacklog, enqueueBacklog, getRu
 import { claimDepartments, releaseClaimsForRun, expireStaleClaims } from "./claims";
 import { gitRun } from "./repo";
 import { runSyncLayer } from "./sync";
+import { isSystemUpdateBlocking } from "./systemUpdate";
 
 export type Provider = "claude-code" | "codex";
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access" | "bypass";
@@ -122,6 +123,9 @@ export interface StartRunResult { run: Run; accepted: boolean; queued?: boolean;
 export async function startRun(req: RunRequest): Promise<StartRunResult> {
   if (globalPaused) {
     return { run: createRun({ department: req.departments[0] || "unknown", trigger: req.trigger, provider: null, prompt: req.prompt, status: "canceled" }), accepted: false, reason: "global pause" };
+  }
+  if (await isSystemUpdateBlocking()) {
+    return { run: createRun({ department: req.departments[0] || "unknown", trigger: req.trigger, provider: null, prompt: req.prompt, status: "canceled" }), accepted: false, reason: "system update in progress" };
   }
   expireStaleClaims();
   const depts = req.departments.length ? req.departments : ["_root"];

@@ -22,7 +22,7 @@ After bootstrap:
 - Node.js LTS, git, Caddy, `aws`, `claude`, `codex` are installed
 - Caddy is **stopped and disabled** (the dashboard starts it after domain setup)
 - systemd unit `/etc/systemd/system/aios.service` is installed but not yet started (no app code yet)
-- Narrow sudoers lets `aios` run exactly: `systemctl enable/start/reload caddy` and `systemctl restart aios`
+- Narrow sudoers lets `aios` run exactly: `systemctl enable/start/reload caddy`, `systemctl restart aios`, and the self-update wrapper
 - Firewall opens 80, 443, 3100
 
 ## 3. Deploy the app
@@ -47,6 +47,12 @@ Visit `http://<vps-ip>:3100`. The page prompts you to create the first admin. Af
 5. **Notifications** — Telegram or SMTP. "Save and send test" verifies end-to-end.
 6. **Complete** — `setupPhase = complete`, the heartbeat begins ticking, and the main dashboard is reachable.
 
+After onboarding, `Settings` can be used to:
+- re-authorize Claude Code or Codex
+- reconnect GitHub
+- update notifications
+- apply future AIOS-VPS updates in place
+
 ## 5. Verify
 
 ```bash
@@ -65,13 +71,15 @@ The sample department has `sample/cron/hello.md` set to `0 * * * *`. Edit the fi
 
 ## 6. Upgrade
 
+Once this release (or newer) is deployed, future upgrades can be started from `Settings -> System update`.
+
 ```bash
 cd /tmp/aios-vps
 git pull
 sudo bash scripts/deploy-app.sh
 ```
 
-`deploy-app.sh` rsyncs the new build and restarts `aios`. The bootstrap script is idempotent — re-run safely if you change it.
+`deploy-app.sh` rsyncs the new build, refreshes the self-update wrapper/sudoers entry, writes the deployed version manifest, and restarts `aios`. The bootstrap script is idempotent — re-run safely if you change it.
 
 ## 7. Backup / restore
 

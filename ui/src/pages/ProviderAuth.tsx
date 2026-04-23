@@ -3,9 +3,16 @@ import { api } from "../api";
 import { Section } from "../components/Section";
 import { Banner } from "../components/Banner";
 
-export function ProviderAuth({ onAdvance }: { onAdvance: () => Promise<void> }) {
+export function ProviderAuth({
+  onAdvance,
+  mode = "onboarding",
+}: {
+  onAdvance?: () => Promise<void>;
+  mode?: "onboarding" | "settings";
+}) {
   const [status, setStatus] = useState<any>(null);
   const timer = useRef<number | null>(null);
+  const advance = onAdvance || (async () => {});
 
   const refresh = async () => {
     try { setStatus(await api("/api/provider-auth/status")); } catch {}
@@ -13,11 +20,11 @@ export function ProviderAuth({ onAdvance }: { onAdvance: () => Promise<void> }) 
 
   useEffect(() => {
     refresh();
-    timer.current = window.setInterval(refresh, 2000);
+    timer.current = window.setInterval(refresh, 3000);
     return () => { if (timer.current) window.clearInterval(timer.current); };
   }, []);
 
-  const skip = async () => { await api("/api/provider-auth/skip", { method: "POST" }); await onAdvance(); };
+  const skip = async () => { await api("/api/provider-auth/skip", { method: "POST" }); await advance(); };
 
   return (
     <div className="col">
@@ -25,10 +32,12 @@ export function ProviderAuth({ onAdvance }: { onAdvance: () => Promise<void> }) 
         <ClaudeCard status={status} onChange={refresh} />
         <CodexCard status={status} onChange={refresh} />
       </div>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <a className="small muted" onClick={skip}>skip — set up a provider later</a>
-        <button className="primary" onClick={onAdvance}>Continue</button>
-      </div>
+      {mode === "onboarding" && (
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <a className="small muted" onClick={skip}>skip — set up a provider later</a>
+          <button className="primary" onClick={advance}>Continue</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -80,7 +89,7 @@ function ClaudeCard({ status, onChange }: { status: any; onChange: () => void })
   };
 
   const detected = !!s?.detected;
-  const canStart = !detected && session?.status !== "waiting";
+  const canStart = session?.status !== "waiting";
 
   return (
     <Section
@@ -88,7 +97,7 @@ function ClaudeCard({ status, onChange }: { status: any; onChange: () => void })
       actions={detected ? <span className="badge ok">connected</span> : <span className="badge">not connected</span>}
     >
       {s?.snapshot?.email && <div className="small muted">{s.snapshot.email} \u00b7 {s.snapshot.subscriptionType}</div>}
-      {canStart && <button onClick={start} disabled={starting}>{starting ? "…" : "Connect Claude Code"}</button>}
+      {canStart && <button onClick={start} disabled={starting}>{starting ? "…" : detected ? "Re-authorize Claude Code" : "Connect Claude Code"}</button>}
       {session?.status === "waiting" && (
         <div className="col">
           {session.verificationUrl
@@ -146,7 +155,7 @@ function CodexCard({ status, onChange }: { status: any; onChange: () => void }) 
       title="Codex"
       actions={detected ? <span className="badge ok">connected</span> : <span className="badge">not connected</span>}
     >
-      {!detected && !session && <button onClick={start} disabled={starting}>{starting ? "\u2026" : "Connect Codex"}</button>}
+      {!session && <button onClick={start} disabled={starting}>{starting ? "\u2026" : detected ? "Re-authorize Codex" : "Connect Codex"}</button>}
       {session?.status === "waiting" && (
         <div className="col">
           {session.verificationUrl

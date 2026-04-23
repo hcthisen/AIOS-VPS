@@ -155,7 +155,8 @@ ${AIOS_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl enable caddy, \\
     /usr/bin/systemctl start caddy, \\
     /usr/bin/systemctl reload caddy, \\
     /usr/bin/systemctl restart caddy, \\
-    /usr/bin/systemctl restart aios
+    /usr/bin/systemctl restart aios, \\
+    /usr/local/bin/aios-system-update
 EOF
 # visudo -c -f validates before swap, so a typo can't lock us out.
 if visudo -c -f "${SUDOERS_FILE}.tmp" >/dev/null; then
@@ -164,6 +165,10 @@ if visudo -c -f "${SUDOERS_FILE}.tmp" >/dev/null; then
 else
   rm -f "${SUDOERS_FILE}.tmp"
   die "refusing to install invalid sudoers file"
+fi
+
+if [[ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/aios-system-update.sh" ]]; then
+  install -m 0755 "$(cd "$(dirname "$0")/.." && pwd)/scripts/aios-system-update.sh" /usr/local/bin/aios-system-update
 fi
 
 # ---------- 6. Provider CLIs ----------

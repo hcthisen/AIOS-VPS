@@ -16,9 +16,15 @@ export interface AiosConfig {
     baseUrlMode: "auto" | "explicit";
     domain: string | null;
   };
+  systemUpdater: {
+    repoUrl: string | null;
+    branch: string;
+    sourceDir: string;
+  };
 }
 
 const defaultHome = process.env.AIOS_HOME || process.env.HOME || "/home/aios";
+const defaultSystemSourceDir = process.env.AIOS_SYSTEM_SOURCE_DIR || "/var/lib/aios/system-src";
 
 function loadOrInitConfig(path: string): AiosConfig {
   if (existsSync(path)) {
@@ -63,6 +69,11 @@ function normalize(input: Partial<AiosConfig>): AiosConfig {
       publicBaseUrl: input.auth?.publicBaseUrl ?? null,
       baseUrlMode: input.auth?.baseUrlMode ?? "auto",
       domain: input.auth?.domain ?? null,
+    },
+    systemUpdater: {
+      repoUrl: input.systemUpdater?.repoUrl ?? null,
+      branch: input.systemUpdater?.branch?.trim() || "main",
+      sourceDir: input.systemUpdater?.sourceDir?.trim() || defaultSystemSourceDir,
     },
   };
 }

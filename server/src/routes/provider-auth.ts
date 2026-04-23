@@ -81,11 +81,12 @@ export function registerProviderAuthRoutes(router: Router) {
       anthropicAuthDetected(),
       codexAuthDetected(),
     ]);
+    const snapshot = anthropic ? await readAnthropicSnapshot() : undefined;
     if ((anthropic || openai) && getSetupPhase() === "provider_setup") {
       await maybeAdvanceProviderPhase();
     }
     res.json({
-      anthropic: { detected: anthropic, session: getAnthropicSession() },
+      anthropic: { detected: anthropic, session: getAnthropicSession(), snapshot },
       openai: { detected: openai, session: getOpenAiSession() },
       setupPhase: getSetupPhase(),
     });

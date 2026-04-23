@@ -20,6 +20,8 @@ See [`AIOS-PRD.md`](./AIOS-PRD.md) for the full product specification.
 - System-managed sync layer: `CLAUDE.md ↔ AGENTS.md`, `org.md` propagation, auto-generated `_org.md`
 - Provider-neutral execution (Claude Code or Codex, selectable per task)
 - Telegram / email notifications
+- Self-update from Settings against the configured AIOS-VPS repo/branch
+- Re-authorize providers, GitHub, and notifications from Settings after onboarding
 - Embedded terminal, per-run and global kill switches
 - Usage + cost tracking, live streaming output
 
@@ -65,7 +67,12 @@ See [`DEPLOY.md`](./DEPLOY.md) for the full walkthrough. The short version:
    - authenticate Claude Code and/or Codex (OAuth PKCE / device auth)
    - connect GitHub, create or attach a repo
    - configure notifications (Telegram or email)
-5. **Done.** First scheduled task runs within one heartbeat cycle.
+5. **Later changes** live in `Settings`:
+   - re-authorize Claude Code or Codex
+   - reconnect GitHub
+   - update notifications
+   - apply future AIOS-VPS updates in place
+6. **Done.** First scheduled task runs within one heartbeat cycle.
 
 Target: fresh VPS to first scheduled run in under 15 minutes, first real task within an hour.
 

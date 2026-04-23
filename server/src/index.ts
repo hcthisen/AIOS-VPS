@@ -9,6 +9,7 @@ import { registerProviderAuthRoutes } from "./routes/provider-auth";
 import { registerOnboardingRoutes } from "./routes/github";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerStorageRoutes } from "./routes/storage";
+import { registerSettingsRoutes } from "./routes/settings";
 import { attachTerminal } from "./terminal";
 import { startHeartbeat } from "./services/heartbeat";
 import { maybeServePublicObject } from "./services/publicBaseUrl";
@@ -24,6 +25,7 @@ async function main() {
   registerOnboardingRoutes(router);
   registerDashboardRoutes(router);
   registerStorageRoutes(router);
+  registerSettingsRoutes(router);
 
   const server = createHttpServer(router, {
     uiDir: config.uiDir,

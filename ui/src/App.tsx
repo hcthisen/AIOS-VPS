@@ -30,6 +30,7 @@ export interface Me {
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [path, navigate] = useRoute();
+  const [systemUpdate, setSystemUpdate] = useState<any>(null);
 
   const refresh = async () => {
     const m = await api<Me>("/api/auth/me");
@@ -55,6 +56,34 @@ export function App() {
       navigate("/");
     }
   }, [me, path]);
+
+  useEffect(() => {
+    if (!me?.user?.isAdmin || me.setupPhase !== "complete") {
+      setSystemUpdate(null);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const next = await api("/api/settings/system-update/status");
+        if (!cancelled) setSystemUpdate(next);
+      } catch {
+        if (!cancelled) setSystemUpdate(null);
+      }
+    };
+    load();
+    const timer = window.setInterval(load, 5 * 60_000);
+    const onStatus = (event: Event) => {
+      const custom = event as CustomEvent<any>;
+      setSystemUpdate(custom.detail || null);
+    };
+    window.addEventListener("aios-system-update-status", onStatus as EventListener);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("aios-system-update-status", onStatus as EventListener);
+    };
+  }, [me?.user?.isAdmin, me?.setupPhase]);
 
   if (!me) return <div className="auth-wrap"><div>Loading…</div></div>;
 
@@ -96,7 +125,10 @@ export function App() {
         <a className={path === "/webhooks" ? "active" : ""} onClick={() => go("/webhooks")}>Webhooks</a>
         <a className={path === "/usage" ? "active" : ""} onClick={() => go("/usage")}>Usage</a>
         <a className={path === "/terminal" ? "active" : ""} onClick={() => go("/terminal")}>Terminal</a>
-        <a className={path === "/settings" ? "active" : ""} onClick={() => go("/settings")}>Settings</a>
+        <a className={path === "/settings" ? "active" : ""} onClick={() => go("/settings")}>
+          <span>Settings</span>
+          {systemUpdate?.state?.updateAvailable ? <span className="badge warn">update</span> : null}
+        </a>
         <hr />
         <div className="small muted">{me.user.email}</div>
         <a onClick={async () => { close(); await api("/api/auth/logout", { method: "POST" }); refresh(); navigate("/auth"); }}>Log out</a>
