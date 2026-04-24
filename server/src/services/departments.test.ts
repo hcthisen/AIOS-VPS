@@ -5,7 +5,15 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 import { config } from "../config";
-import { createDepartment, DepartmentCreateError, normalizeDepartmentName } from "./departments";
+import {
+  createDepartment,
+  DepartmentCreateError,
+  ensureRootDepartmentName,
+  getRootDepartment,
+  listCronTasks,
+  normalizeDepartmentName,
+  updateRootDepartmentName,
+} from "./departments";
 
 describe("departments", () => {
   let tempRoot = "";
@@ -48,7 +56,13 @@ describe("departments", () => {
     assert.equal(agents, claude);
     assert.match(claude, /# marketing-ops department/);
 
-    for (const rel of ["cron/.gitkeep", "goals/.gitkeep", "skills/.gitkeep", "webhooks/.gitkeep"]) {
+    for (const rel of [
+      "cron/.gitkeep",
+      "goals/.gitkeep",
+      "webhooks/.gitkeep",
+      "skills/cron-management/SKILL.md",
+      "skills/goal-management/SKILL.md",
+    ]) {
       const s = await stat(join(tempRoot, "marketing-ops", rel));
       assert.ok(s.isFile());
     }
@@ -63,5 +77,39 @@ describe("departments", () => {
         && error.code === "conflict"
         && /already exists/.test(error.message),
     );
+  });
+
+  it("stores the root display name in aios.yaml", async () => {
+    const root = await updateRootDepartmentName("HQ");
+
+    assert.equal(root.name, "_root");
+    assert.equal(root.displayName, "HQ");
+    assert.equal((await getRootDepartment()).displayName, "HQ");
+    assert.match(await readFile(join(tempRoot, "aios.yaml"), "utf-8"), /^rootName: HQ/m);
+  });
+
+  it("writes the default root display name when missing", async () => {
+    const changed = await ensureRootDepartmentName();
+
+    assert.equal(changed, join(tempRoot, "aios.yaml"));
+    assert.equal((await getRootDepartment()).displayName, "Root");
+    assert.match(await readFile(join(tempRoot, "aios.yaml"), "utf-8"), /^rootName: Root/m);
+  });
+
+  it("lists root cron tasks from the repository root", async () => {
+    await mkdir(join(tempRoot, "cron"), { recursive: true });
+    await writeFile(join(tempRoot, "cron", "maintenance.md"), [
+      "---",
+      "schedule: \"0 * * * *\"",
+      "---",
+      "",
+      "Check cross-department maintenance.",
+      "",
+    ].join("\n"), "utf-8");
+
+    const tasks = await listCronTasks();
+    const task = tasks.find((entry) => entry.department === "_root");
+    assert.equal(task?.relPath, "cron/maintenance.md");
+    assert.equal(task?.name, "maintenance");
   });
 });

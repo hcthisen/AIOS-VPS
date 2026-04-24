@@ -4,7 +4,7 @@
 
 import { join } from "path";
 
-import { listDepartments } from "./departments";
+import { ROOT_DEPARTMENT_NAME, getRootDepartment, listDepartments } from "./departments";
 import {
   removeManagedSection,
   upsertManagedSection,
@@ -52,6 +52,10 @@ Credentials are in .env as AIOS_STORAGE_* variables.
 }
 
 async function contextPaths(deptName: string): Promise<string[]> {
+  if (deptName === ROOT_DEPARTMENT_NAME) {
+    const root = await getRootDepartment();
+    return [join(root.path, "CLAUDE.md"), join(root.path, "AGENTS.md")];
+  }
   const depts = await listDepartments();
   const d = depts.find((x) => x.name === deptName);
   if (!d) throw new Error(`department not found: ${deptName}`);

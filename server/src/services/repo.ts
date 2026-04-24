@@ -16,6 +16,8 @@ const execFileAsync = promisify(execFile);
 
 export interface AiosYaml {
   version?: string | number;
+  rootName?: string;
+  root_name?: string;
   departments?: string[];
   ignored?: string[];
   mirrors?: Array<{ source: string; target: string }>;
@@ -233,6 +235,10 @@ function buildDefaultContext(name: string): AiosContextInput {
   };
 }
 
+export function rootDisplayNameFromYaml(y: AiosYaml | null | undefined): string {
+  return String(y?.rootName || y?.root_name || "Root").trim() || "Root";
+}
+
 function buildRootOrgMd(input: AiosContextInput): string {
   const parentScope = String(input.parentScope || "").trim();
   return `---
@@ -357,10 +363,115 @@ export async function writeRepoContext(dir: string, input: AiosContextInput): Pr
   await writeFile(join(dir, "AGENTS.md"), rootContext);
 }
 
+export function buildDefaultReadmeMd(name: string): string {
+  return `# ${name}
+
+AIOS turns this Git repository into an autonomous operating workspace: the root scope and each department folder contain the instructions, schedules, goals, skills, environment files, and outputs used by dashboard-triggered Claude Code or Codex runs, while Git remains the source of truth.
+
+## How AIOS Operates
+
+- Heartbeat: runs about once per minute after onboarding is complete. Each tick pulls the repo, runs sync, scans due cron tasks, evaluates active goals, and starts or queues runs if the target scope is free.
+- Sync: runs after each successful pull and after successful agent runs. It mirrors \`CLAUDE.md\` and \`AGENTS.md\`, copies root \`org.md\` into departments, regenerates \`_org.md\`, and mirrors \`skills/\` into provider-specific skill folders.
+- Cron: put scheduled prompts in \`cron/*.md\` with frontmatter like \`schedule: "0 * * * *"\`, optional \`provider\`, and optional \`paused: true\`. Pause jobs instead of deleting them.
+- Goals: put long-running objectives in \`goals/*.md\` with \`status: active|paused|complete\`, optional \`provider\`, and \`state: {}\`. Active goals are evaluated once per heartbeat, so the agent should do the next useful step or skip.
+- Skills: put reusable procedures in \`skills/<name>/SKILL.md\`. AIOS syncs them for both Claude Code and Codex so agents can reliably create, edit, and pause cron tasks and goals.
+- Root scope: root-level \`cron/\`, \`goals/\`, and \`skills/\` are for maintenance or cross-department work that should start from the repository root.
+`;
+}
+
+export async function ensureAutomationWorkspace(dir: string): Promise<string[]> {
+  const changed: string[] = [];
+  for (const folder of ["cron", "goals", "skills", "webhooks", "logs"]) {
+    await mkdir(join(dir, folder), { recursive: true });
+  }
+  for (const file of ["cron/.gitkeep", "goals/.gitkeep", "webhooks/.gitkeep"]) {
+    const abs = join(dir, file);
+    if (!existsSync(abs)) {
+      await writeFile(abs, "", "utf-8");
+      changed.push(abs);
+    }
+  }
+  const defaults: Array<[string, string]> = [
+    ["skills/cron-management/SKILL.md", buildCronManagementSkillMd()],
+    ["skills/goal-management/SKILL.md", buildGoalManagementSkillMd()],
+  ];
+  for (const [rel, body] of defaults) {
+    const abs = join(dir, rel);
+    if (existsSync(abs)) continue;
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, body, "utf-8");
+    changed.push(abs);
+  }
+  return changed;
+}
+
+function buildCronManagementSkillMd(): string {
+  return `---
+name: cron-management
+description: Create, edit, pause, and inspect AIOS cron tasks in cron/*.md files.
+---
+# Cron Management
+
+Use this skill when creating or changing scheduled AIOS work.
+
+Cron tasks live in \`cron/*.md\`. Each file is a prompt with YAML frontmatter.
+
+\`\`\`md
+---
+schedule: "0 * * * *"
+provider: claude-code
+paused: false
+---
+
+Do the scheduled work.
+\`\`\`
+
+Rules:
+- Never delete a cron job. If it should stop running, set \`paused: true\`.
+- Keep the filename stable when editing an existing task so run history and references remain understandable.
+- Use standard five-field cron expressions unless the existing task already uses another supported form.
+- Keep prompts specific, bounded, and safe to run unattended.
+- Use \`provider: claude-code\` or \`provider: codex\` only when the task needs a specific provider; otherwise omit it.
+- When re-enabling a paused task, set \`paused: false\` or remove the paused field.
+`;
+}
+
+function buildGoalManagementSkillMd(): string {
+  return `---
+name: goal-management
+description: Create, edit, pause, and inspect AIOS long-running goals in goals/*.md files.
+---
+# Goal Management
+
+Use this skill when creating or changing long-running AIOS objectives.
+
+Goals live in \`goals/*.md\`. Each file is a prompt with YAML frontmatter.
+
+\`\`\`md
+---
+status: active
+provider: claude-code
+state: {}
+---
+
+Advance this objective by taking the next smallest useful step.
+\`\`\`
+
+Rules:
+- Never delete a goal. If it should stop running, set \`status: paused\`.
+- Mark a goal \`status: complete\` only when its definition of done is satisfied.
+- Keep \`state\` small and factual so future runs can resume without rereading unrelated history.
+- Active goals are evaluated about once per heartbeat, currently once per minute, so the prompt should allow the agent to skip when no useful work is due.
+- Keep goals outcome-oriented; put recurring fixed-time work in cron instead.
+- Use \`provider: claude-code\` or \`provider: codex\` only when the goal needs a specific provider; otherwise omit it.
+`;
+}
+
 export async function scaffoldRepo(dir: string, opts: { name: string }): Promise<void> {
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "aios.yaml"),
     `version: 1
+rootName: Root
 departments:
   - sample
 ignored:
@@ -369,16 +480,14 @@ ignored:
   - dashboard
 `);
   await writeRepoContext(dir, buildDefaultContext(opts.name));
+  await ensureAutomationWorkspace(dir);
   await writeFile(join(dir, "README.md"),
-    `# ${opts.name}\n\nManaged by AIOS. See \`aios.yaml\` for the department list.\n`);
+    buildDefaultReadmeMd(opts.name));
   await writeFile(join(dir, ".gitignore"),
     "node_modules/\n.env\n.env.local\nlogs/\n*.log\n");
 
   const dept = join(dir, "sample");
-  await mkdir(join(dept, "cron"), { recursive: true });
-  await mkdir(join(dept, "goals"), { recursive: true });
-  await mkdir(join(dept, "skills"), { recursive: true });
-  await mkdir(join(dept, "logs"), { recursive: true });
+  await ensureAutomationWorkspace(dept);
   const sampleContext = buildDepartmentContextMd("sample");
   await writeFile(join(dept, "CLAUDE.md"), sampleContext);
   await writeFile(join(dept, "AGENTS.md"), sampleContext);

@@ -3,13 +3,18 @@ import { api } from "../api";
 import { Section } from "../components/Section";
 
 export function ManualRunPage() {
-  const [depts, setDepts] = useState<string[]>([]);
+  const [scopes, setScopes] = useState<Array<{ name: string; label: string }>>([]);
   const [dept, setDept] = useState("");
   const [provider, setProvider] = useState<"" | "claude-code" | "codex">("");
   const [prompt, setPrompt] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
 
-  useEffect(() => { api("/api/departments").then((r: any) => setDepts(r.departments.map((d: any) => d.name))); }, []);
+  useEffect(() => {
+    api("/api/departments").then((r: any) => setScopes([
+      { name: r.root?.name || "_root", label: r.root?.displayName || "Root" },
+      ...r.departments.map((d: any) => ({ name: d.name, label: d.name })),
+    ]));
+  }, []);
 
   const fire = async () => {
     setMsg(null);
@@ -26,12 +31,12 @@ export function ManualRunPage() {
   return (
     <div className="col narrow">
       <h2>Manual run</h2>
-      <Section description="Fire a one-off prompt at a department. If the department is busy, the request is queued.">
+      <Section description="Fire a one-off prompt at Root or a department. If the scope is busy, the request is queued.">
         <label className="col">
-          <span className="small muted">Department</span>
+          <span className="small muted">Scope</span>
           <select value={dept} onChange={(e) => setDept(e.target.value)}>
-            <option value="">-- select department --</option>
-            {depts.map((d) => <option key={d} value={d}>{d}</option>)}
+            <option value="">-- select scope --</option>
+            {scopes.map((scope) => <option key={scope.name} value={scope.name}>{scope.label}</option>)}
           </select>
         </label>
         <label className="col">

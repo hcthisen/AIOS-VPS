@@ -4,7 +4,7 @@
 
 import { join } from "path";
 
-import { listDepartments } from "./departments";
+import { ROOT_DEPARTMENT_NAME, getRootDepartment, listDepartments } from "./departments";
 import { mergeEnv, readEnvFile, toMap } from "./envFile";
 
 export interface StorageConfig {
@@ -72,6 +72,9 @@ export function normalizeOptionalUrl(raw: string, field: string): string {
 }
 
 export async function deptEnvPath(deptName: string): Promise<string> {
+  if (deptName === ROOT_DEPARTMENT_NAME) {
+    return join((await getRootDepartment()).path, ".env");
+  }
   const depts = await listDepartments();
   const d = depts.find((x) => x.name === deptName);
   if (!d) throw new Error(`department not found: ${deptName}`);

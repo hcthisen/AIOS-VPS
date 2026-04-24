@@ -51,6 +51,8 @@ interface Claim {
 
 interface Department {
   name: string;
+  displayName?: string;
+  isRoot?: boolean;
   path: string;
   claim: Claim | null;
   cron: CronTask[];
@@ -82,6 +84,7 @@ interface GoalEditorState {
 }
 
 export function DepartmentDetail({ name, navigate }: { name: string; navigate: (t: string) => void }) {
+  const isRootScope = name === "_root";
   const [d, setD] = useState<Department | null>(null);
   const [tab, setTabState] = useState<TabId>(() => readTabFromUrl());
   const [filesQuery, setFilesQueryState] = useState<FilesQuery>(() => readFilesQueryFromUrl());
@@ -137,7 +140,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
   }, [name]);
 
   useEffect(() => {
-    loadFile(`${name}/.env`, (text) => {
+    loadFile(scopedRelPath(name, ".env"), (text) => {
       setEnvText(text);
       setEnvInitial(text);
     }, true);
@@ -225,7 +228,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
 
   const saveEnv = () =>
     runAction("env-save", async () => {
-      await saveTextFile(`${name}/.env`, envText);
+      await saveTextFile(scopedRelPath(name, ".env"), envText);
       setEnvInitial(envText);
       setEnvSavedAt(Date.now());
     }, setNotice);
@@ -254,7 +257,8 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
 
       <div className="page-header">
         <div>
-          <h2>{d.name} {claimBadge}</h2>
+          <h2>{d.displayName || d.name} {claimBadge}</h2>
+          {isRootScope && <div className="small muted">Root execution scope</div>}
           <div className="path mono">{d.path}</div>
         </div>
         <div className="page-header-actions">
@@ -269,7 +273,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       {tab === "tasks" && (
         <Section
           title="Scheduled tasks"
-          description="Cron files under this department's cron/ folder."
+          description={isRootScope ? "Cron files under the root cron/ folder." : "Cron files under this department's cron/ folder."}
           actions={<button className="primary" onClick={openCreateCron}>Add task</button>}
         >
           {!d.cron?.length ? (
@@ -317,7 +321,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       {tab === "goals" && (
         <Section
           title="Goals"
-          description="Long-running goals under this department's goals/ folder."
+          description={isRootScope ? "Long-running goals under the root goals/ folder." : "Long-running goals under this department's goals/ folder."}
           actions={<button className="primary" onClick={openCreateGoal}>Add goal</button>}
         >
           {!d.goals?.length ? (
@@ -672,7 +676,12 @@ function stripFrontmatter(text: string): string {
 
 function buildRelPath(dept: string, sub: "cron" | "goals", name: string) {
   const file = name.trim().replace(/[^\w.-]+/g, "-");
+  if (dept === "_root") return `${sub}/${file}.md`;
   return `${dept}/${sub}/${file}.md`;
+}
+
+function scopedRelPath(dept: string, relPath: string) {
+  return dept === "_root" ? relPath : `${dept}/${relPath}`;
 }
 
 const VALID_TABS: TabId[] = ["tasks", "goals", "files", "env", "runs", "backlog"];

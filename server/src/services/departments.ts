@@ -1,12 +1,19 @@
 // Department + cron + goal parsers. Files are the source of truth.
 
-import { mkdir, readdir, readFile, stat, writeFile } from "fs/promises";
+import { readdir, readFile, stat, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import matter from "gray-matter";
 
 import { config } from "../config";
-import { buildDepartmentContextMd, readAiosYaml } from "./repo";
+import {
+  buildDepartmentContextMd,
+  ensureAutomationWorkspace,
+  readAiosYaml,
+  rootDisplayNameFromYaml,
+} from "./repo";
+
+export const ROOT_DEPARTMENT_NAME = "_root";
 
 export interface CronTask {
   path: string;          // absolute file path
@@ -32,8 +39,10 @@ export interface Goal {
 
 export interface Department {
   name: string;
+  displayName?: string;
   path: string;
   contextPath: string;
+  isRoot?: boolean;
 }
 
 export class DepartmentCreateError extends Error {
@@ -77,26 +86,44 @@ export async function createDepartment(input: { name: string }): Promise<Departm
   }
 
   await writeDepartmentToAiosYaml(name);
-  await mkdir(join(deptPath, "cron"), { recursive: true });
-  await mkdir(join(deptPath, "goals"), { recursive: true });
-  await mkdir(join(deptPath, "skills"), { recursive: true });
-  await mkdir(join(deptPath, "webhooks"), { recursive: true });
-  await mkdir(join(deptPath, "logs"), { recursive: true });
+  await ensureAutomationWorkspace(deptPath);
 
   const context = buildDepartmentContextMd(name);
   await writeFile(join(deptPath, "CLAUDE.md"), context, "utf-8");
   await writeFile(join(deptPath, "AGENTS.md"), context, "utf-8");
   await writeFile(join(deptPath, "README.md"), `# ${name}\n\nDepartment managed by AIOS.\n`, "utf-8");
-  await writeFile(join(deptPath, "cron", ".gitkeep"), "", "utf-8");
-  await writeFile(join(deptPath, "goals", ".gitkeep"), "", "utf-8");
-  await writeFile(join(deptPath, "skills", ".gitkeep"), "", "utf-8");
-  await writeFile(join(deptPath, "webhooks", ".gitkeep"), "", "utf-8");
 
   return {
     name,
     path: deptPath,
     contextPath: join(deptPath, "CLAUDE.md"),
   };
+}
+
+export async function getRootDepartment(): Promise<Department> {
+  const y = await readAiosYaml();
+  return {
+    name: ROOT_DEPARTMENT_NAME,
+    displayName: rootDisplayNameFromYaml(y),
+    path: config.repoDir,
+    contextPath: join(config.repoDir, "CLAUDE.md"),
+    isRoot: true,
+  };
+}
+
+export async function updateRootDepartmentName(input: string): Promise<Department> {
+  const displayName = String(input || "").trim();
+  if (!displayName) throw new DepartmentCreateError("bad_request", "root name required");
+  if (displayName.length > 60) throw new DepartmentCreateError("bad_request", "root name must be 60 characters or fewer");
+  await writeRootNameToAiosYaml(displayName);
+  return getRootDepartment();
+}
+
+export async function ensureRootDepartmentName(): Promise<string | null> {
+  const y = await readAiosYaml();
+  if (String(y?.rootName || y?.root_name || "").trim()) return null;
+  await writeRootNameToAiosYaml("Root");
+  return join(config.repoDir, "aios.yaml");
 }
 
 export async function listDepartments(): Promise<Department[]> {
@@ -118,7 +145,7 @@ export async function listDepartments(): Promise<Department[]> {
 }
 
 export async function listCronTasks(): Promise<CronTask[]> {
-  const depts = await listDepartments();
+  const depts = [await getRootDepartment(), ...(await listDepartments())];
   const tasks: CronTask[] = [];
   for (const d of depts) {
     const cronDir = join(d.path, "cron");
@@ -134,7 +161,7 @@ export async function listCronTasks(): Promise<CronTask[]> {
         if (!schedule) continue;
         tasks.push({
           path: abs,
-          relPath: `${d.name}/cron/${f}`,
+          relPath: d.isRoot ? `cron/${f}` : `${d.name}/cron/${f}`,
           department: d.name,
           name: f.replace(/\.md$/, ""),
           schedule,
@@ -149,7 +176,7 @@ export async function listCronTasks(): Promise<CronTask[]> {
 }
 
 export async function listGoals(): Promise<Goal[]> {
-  const depts = await listDepartments();
+  const depts = [await getRootDepartment(), ...(await listDepartments())];
   const goals: Goal[] = [];
   for (const d of depts) {
     const dir = join(d.path, "goals");
@@ -163,7 +190,7 @@ export async function listGoals(): Promise<Goal[]> {
         const fm = parsed.data as any;
         goals.push({
           path: abs,
-          relPath: `${d.name}/goals/${f}`,
+          relPath: d.isRoot ? `goals/${f}` : `${d.name}/goals/${f}`,
           department: d.name,
           name: f.replace(/\.md$/, ""),
           status: (fm.status as any) || "active",
@@ -213,4 +240,24 @@ function rewriteDepartmentsSection(raw: string, departments: string[]): string {
 function quoteYamlScalar(value: string): string {
   if (/^[A-Za-z0-9._-]+$/.test(value)) return value;
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+async function writeRootNameToAiosYaml(displayName: string): Promise<void> {
+  const path = join(config.repoDir, "aios.yaml");
+  const raw = existsSync(path)
+    ? await readFile(path, "utf-8")
+    : "version: 1\ndepartments:\n";
+  await writeFile(path, rewriteScalarKey(raw, "rootName", displayName), "utf-8");
+}
+
+function rewriteScalarKey(raw: string, key: string, value: string): string {
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  const idx = lines.findIndex((line) => new RegExp(`^${key}:\\s*`).test(line));
+  const next = `${key}: ${quoteYamlScalar(value)}`;
+  if (idx >= 0) {
+    lines[idx] = next;
+    return [...lines, ""].join("\n");
+  }
+  return [next, ...lines, ""].join("\n");
 }

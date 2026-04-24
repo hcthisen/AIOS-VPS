@@ -13,8 +13,8 @@ import { existsSync } from "fs";
 import { join } from "path";
 
 import { config } from "../config";
-import { listDepartments } from "./departments";
-import { gitRun } from "./repo";
+import { ensureRootDepartmentName, getRootDepartment, listDepartments } from "./departments";
+import { buildDefaultReadmeMd, ensureAutomationWorkspace, gitRun, rootDisplayNameFromYaml, readAiosYaml } from "./repo";
 import { log } from "../log";
 import { sendNotification } from "./notifications";
 
@@ -40,6 +40,21 @@ async function readFirstLineDescription(contextPath: string): Promise<string> {
   return "(no CLAUDE.md)";
 }
 
+async function ensureRootReadme(rootName: string): Promise<boolean> {
+  const path = join(config.repoDir, "README.md");
+  const next = buildDefaultReadmeMd(rootName);
+  if (!existsSync(path)) {
+    await writeFile(path, next, "utf-8");
+    return true;
+  }
+  const current = await readFile(path, "utf-8").catch(() => "");
+  const isOldScaffold = /^# .+\r?\n\r?\nManaged by AIOS\. See `aios\.yaml` for the department list\.\r?\n?$/.test(current);
+  if (!isOldScaffold) return false;
+  if (current === next) return false;
+  await writeFile(path, next, "utf-8");
+  return true;
+}
+
 async function copyTree(src: string, dst: string): Promise<void> {
   if (!existsSync(src)) return;
   const srcStat = await stat(src);
@@ -60,11 +75,27 @@ export interface SyncResult {
 
 export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }): Promise<SyncResult> {
   const out: SyncResult = { changed: [], conflicts: [] };
+  const root = await getRootDepartment();
   const depts = await listDepartments();
+  const scopes = [root, ...depts];
+  const yaml = await readAiosYaml();
+  const rootNamePath = await ensureRootDepartmentName();
+  if (rootNamePath) out.changed.push(rootNamePath);
 
   // 1. CLAUDE.md <-> AGENTS.md per department (and at repo root).
   await mirrorClaudeAgents(config.repoDir, out);
   for (const dept of depts) await mirrorClaudeAgents(dept.path, out);
+
+  // 1b. Ensure root/departments have the standard automation folders and
+  // default non-destructive cron/goal skills. Existing skill files are not
+  // overwritten.
+  for (const scope of scopes) {
+    const changed = await ensureAutomationWorkspace(scope.path);
+    out.changed.push(...changed);
+  }
+  if (await ensureRootReadme(rootDisplayNameFromYaml(yaml))) {
+    out.changed.push(join(config.repoDir, "README.md"));
+  }
 
   // 2. org.md propagation.
   const rootOrg = join(config.repoDir, "org.md");
@@ -87,14 +118,14 @@ export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }
     ...summaries.map((summary) => `- **${summary.name}**: ${summary.line}`),
     "",
   ].join("\n");
-  for (const dept of depts) {
+  for (const dept of scopes) {
     const dst = join(dept.path, "_org.md");
     if (await writeIfChanged(dst, orgMap)) out.changed.push(dst);
   }
 
   // 4. Skills sync. Canonical location: <dept>/skills/. Mirror into
   //    <dept>/.claude/skills/ and <dept>/.codex/skills/ so both providers see them.
-  for (const dept of depts) {
+  for (const dept of scopes) {
     const canonical = join(dept.path, "skills");
     if (!existsSync(canonical)) continue;
     for (const target of [join(dept.path, ".claude", "skills"), join(dept.path, ".codex", "skills")]) {

@@ -8,11 +8,15 @@ import { FeedbackButton, useActionRunner } from "../components/FeedbackButton";
 export function DepartmentsPage({ navigate }: { navigate: (t: string) => void }) {
   const [data, setData] = useState<any>(null);
   const [name, setName] = useState("");
+  const [rootName, setRootName] = useState("Root");
   const [notice, setNotice] = useState<string | null>(null);
   const { actions, run: runAction } = useActionRunner();
   const slug = normalizeDepartmentName(name);
 
-  const refresh = () => api("/api/departments").then(setData);
+  const refresh = () => api("/api/departments").then((next: any) => {
+    setData(next);
+    setRootName(next.root?.displayName || "Root");
+  });
 
   useEffect(() => { refresh().catch((e) => setNotice(e?.message || String(e))); }, []);
 
@@ -28,10 +32,61 @@ export function DepartmentsPage({ navigate }: { navigate: (t: string) => void })
       navigate(`/departments/${encodeURIComponent(result.department.name)}`);
     }, setNotice);
 
+  const saveRootName = () =>
+    runAction("root-save", async () => {
+      const result = await api<{ root: { displayName: string } }>("/api/root", {
+        method: "PUT",
+        body: JSON.stringify({ displayName: rootName }),
+      });
+      setRootName(result.root.displayName || "Root");
+      await refresh();
+    }, setNotice);
+
+  const root = data?.root;
+  const rootDirty = root && rootName.trim() !== (root.displayName || "Root");
+
   return (
     <div className="col">
       <h2>Departments</h2>
       {notice && <Banner kind="err" onDismiss={() => setNotice(null)}>{notice}</Banner>}
+      <Section
+        title={root?.displayName || "Root"}
+        description="Top-level workspace for maintenance and cross-department runs. Agents start in the repository root and can use root cron, goals, skills, webhooks, and environment files."
+        actions={
+          <>
+            {root?.claim
+              ? <span className="badge warn">claimed</span>
+              : <span className="badge ok">free</span>}
+            <IconButton onClick={() => navigate(`/departments/${encodeURIComponent(root?.name || "_root")}`)}>
+              Open
+            </IconButton>
+          </>
+        }
+      >
+        <div className="row nowrap">
+          <label className="col" style={{ flex: 1 }}>
+            <span className="small muted">Dashboard name</span>
+            <input
+              value={rootName}
+              onChange={(e) => setRootName(e.target.value)}
+              placeholder="Root"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && rootDirty) saveRootName();
+              }}
+            />
+          </label>
+          <FeedbackButton
+            className="ghost"
+            state={actions["root-save"] || "idle"}
+            idleLabel="Save name"
+            workingLabel="Saving..."
+            okLabel="Saved"
+            onClick={saveRootName}
+            disabled={!rootDirty}
+          />
+        </div>
+        <div className="small muted">Path: <code>{root?.path || "repository root"}</code></div>
+      </Section>
       <Section
         title="Add department"
         description="Creates the folder, updates aios.yaml, writes CLAUDE.md and AGENTS.md, and prepares cron, goals, skills, webhooks, and logs directories."

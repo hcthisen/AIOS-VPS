@@ -10,7 +10,16 @@ import matter from "gray-matter";
 import { Router, badRequest, conflict, notFound, AiosRequest } from "../http";
 import { adminOnly } from "../auth";
 import { config } from "../config";
-import { createDepartment, DepartmentCreateError, listDepartments, listCronTasks, listGoals } from "../services/departments";
+import {
+  createDepartment,
+  DepartmentCreateError,
+  getRootDepartment,
+  listDepartments,
+  listCronTasks,
+  listGoals,
+  ROOT_DEPARTMENT_NAME,
+  updateRootDepartmentName,
+} from "../services/departments";
 import { listRuns, getRun, activeRuns, listBacklog, runEvents, Run } from "../services/runs";
 import { listClaims } from "../services/claims";
 import { startRun, killRun, killAllRuns, setGlobalPause, isGlobalPaused, activeProcessCount } from "../services/executor";
@@ -24,9 +33,15 @@ export function registerDashboardRoutes(router: Router) {
   // ---------- Departments ----------
   router.get("/api/departments", async (req, res) => {
     await guard(req, res);
-    const depts = await listDepartments();
+    const [root, depts] = await Promise.all([getRootDepartment(), listDepartments()]);
     const claims = new Map(listClaims().map((c) => [c.department, c]));
     res.json({
+      root: {
+        name: root.name,
+        displayName: root.displayName,
+        path: root.path,
+        claim: claims.get(root.name) || null,
+      },
       departments: depts.map((d) => ({
         name: d.name,
         path: d.path,
@@ -57,11 +72,35 @@ export function registerDashboardRoutes(router: Router) {
     }
   });
 
+  router.put("/api/root", async (req, res) => {
+    await guard(req, res);
+    try {
+      const root = await updateRootDepartmentName(String(req.body?.displayName || req.body?.name || ""));
+      const sync = await runSyncLayer({ commit: false });
+      res.json({
+        ok: true,
+        root: {
+          name: root.name,
+          displayName: root.displayName,
+          path: root.path,
+          claim: listClaims().find((c) => c.department === root.name) || null,
+        },
+        sync,
+      });
+    } catch (e: any) {
+      if (e instanceof DepartmentCreateError) {
+        throw e.code === "conflict" ? conflict(e.message) : badRequest(e.message);
+      }
+      throw e;
+    }
+  });
+
   router.get("/api/departments/:name", async (req, res) => {
     await guard(req, res);
     const name = req.params.name;
-    const depts = await listDepartments();
-    const d = depts.find((x) => x.name === name);
+    const d = name === ROOT_DEPARTMENT_NAME
+      ? await getRootDepartment()
+      : (await listDepartments()).find((x) => x.name === name);
     if (!d) throw notFound("department not found");
     const [tasks, goals] = await Promise.all([
       listCronTasks().then((all) => all.filter((t) => t.department === name)),
@@ -69,6 +108,8 @@ export function registerDashboardRoutes(router: Router) {
     ]);
     res.json({
       name: d.name,
+      displayName: d.displayName,
+      isRoot: !!d.isRoot,
       path: d.path,
       claim: listClaims().find((c) => c.department === name) || null,
       cron: tasks,
