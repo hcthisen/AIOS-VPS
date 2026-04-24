@@ -9,8 +9,11 @@ import { pathToFileURL } from "url";
 
 import { config } from "../config";
 import {
+  buildGitInvocation,
   getSystemUpdateSnapshot,
   isSystemUpdateBlocking,
+  readSystemUpdateState,
+  SYSTEM_UPDATE_STALE_LOCK_MS,
   writeSystemUpdateState,
 } from "./systemUpdate";
 
@@ -128,5 +131,60 @@ describe("systemUpdate", () => {
     });
 
     assert.equal(await isSystemUpdateBlocking(), false);
+  });
+
+  it("clears stale maintenance locks so heartbeat can resume", async () => {
+    await writeSystemUpdateState({
+      inProgress: true,
+      maintenance: true,
+      stage: "deploying",
+      message: "updating",
+      startedAt: Date.now() - SYSTEM_UPDATE_STALE_LOCK_MS - 1_000,
+    });
+
+    assert.equal(await isSystemUpdateBlocking(), false);
+
+    const state = await readSystemUpdateState();
+    assert.equal(state.inProgress, false);
+    assert.equal(state.maintenance, false);
+    assert.equal(state.stage, "failed");
+    assert.match(state.lastError || "", /stale/i);
+  });
+
+  it("clears stale maintenance locks in update status snapshots", async () => {
+    await writeSystemUpdateState({
+      inProgress: true,
+      maintenance: true,
+      stage: "starting",
+      message: "Update requested",
+      startedAt: Date.now() - SYSTEM_UPDATE_STALE_LOCK_MS - 1_000,
+    });
+
+    const snapshot = await getSystemUpdateSnapshot();
+
+    assert.equal(snapshot.state.inProgress, false);
+    assert.equal(snapshot.state.maintenance, false);
+    assert.equal(snapshot.state.stage, "failed");
+    assert.match(snapshot.state.lastError || "", /stale/i);
+  });
+
+  it("keeps HTTPS updater URLs on HTTPS even when deploy-key credentials exist", async () => {
+    const git = buildGitInvocation("https://github.com/hcthisen/AIOS-VPS", {
+      mode: "deploy_key",
+      privateKeyPath: "/tmp/key",
+    });
+
+    assert.equal(git.remoteUrl, "https://github.com/hcthisen/AIOS-VPS");
+    assert.equal(git.env.GIT_SSH_COMMAND, undefined);
+  });
+
+  it("uses deploy-key SSH configuration for SSH updater URLs", async () => {
+    const git = buildGitInvocation("git@github.com:hcthisen/AIOS-VPS.git", {
+      mode: "deploy_key",
+      privateKeyPath: "/tmp/key",
+    });
+
+    assert.equal(git.remoteUrl, "git@github.com:hcthisen/AIOS-VPS.git");
+    assert.match(git.env.GIT_SSH_COMMAND || "", /\/tmp\/key/);
   });
 });

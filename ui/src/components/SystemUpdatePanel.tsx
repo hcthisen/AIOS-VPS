@@ -125,7 +125,7 @@ export function SystemUpdatePanel() {
         <input
           value={repoUrl}
           onChange={(e) => { setRepoUrl(e.target.value); setDirty(true); }}
-          placeholder="https://github.com/you/AIOS-VPS.git"
+          placeholder="https://github.com/hcthisen/AIOS-VPS"
         />
       </label>
       <label className="col">

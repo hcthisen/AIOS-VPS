@@ -51,7 +51,7 @@ After onboarding, `Settings` can be used to:
 - re-authorize Claude Code or Codex
 - reconnect GitHub
 - update notifications
-- apply future AIOS-VPS updates in place
+- apply future AIOS-VPS updates in place. The updater source defaults to `https://github.com/hcthisen/AIOS-VPS` and can be changed in Settings.
 
 ## 5. Verify
 

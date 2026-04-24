@@ -89,6 +89,11 @@ CREATE TABLE IF NOT EXISTS cron_state (
   last_fired INTEGER NOT NULL,
   paused     INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS goal_state (
+  path       TEXT PRIMARY KEY,
+  last_fired INTEGER NOT NULL
+);
 `);
 
 export function kvGet(k: string): string | null {

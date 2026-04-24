@@ -24,6 +24,7 @@ export interface AiosConfig {
 }
 
 const defaultHome = process.env.AIOS_HOME || process.env.HOME || "/home/aios";
+export const DEFAULT_SYSTEM_UPDATER_REPO_URL = process.env.AIOS_SYSTEM_REPO_URL || "https://github.com/hcthisen/AIOS-VPS";
 const defaultSystemSourceDir = process.env.AIOS_SYSTEM_SOURCE_DIR || "/var/lib/aios/system-src";
 
 function loadOrInitConfig(path: string): AiosConfig {
@@ -71,7 +72,7 @@ function normalize(input: Partial<AiosConfig>): AiosConfig {
       domain: input.auth?.domain ?? null,
     },
     systemUpdater: {
-      repoUrl: input.systemUpdater?.repoUrl ?? null,
+      repoUrl: input.systemUpdater?.repoUrl ?? DEFAULT_SYSTEM_UPDATER_REPO_URL,
       branch: input.systemUpdater?.branch?.trim() || "main",
       sourceDir: input.systemUpdater?.sourceDir?.trim() || defaultSystemSourceDir,
     },

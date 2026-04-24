@@ -49,7 +49,8 @@ async function ensureRootReadme(rootName: string): Promise<boolean> {
   }
   const current = await readFile(path, "utf-8").catch(() => "");
   const isOldScaffold = /^# .+\r?\n\r?\nManaged by AIOS\. See `aios\.yaml` for the department list\.\r?\n?$/.test(current);
-  if (!isOldScaffold) return false;
+  const isOldGeneratedReadme = current.includes("Active goals are evaluated once per heartbeat");
+  if (!isOldScaffold && !isOldGeneratedReadme) return false;
   if (current === next) return false;
   await writeFile(path, next, "utf-8");
   return true;

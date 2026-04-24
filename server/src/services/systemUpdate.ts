@@ -11,6 +11,7 @@ import { cloneUrlWithPat, getGithubCreds } from "./github";
 const execFileAsync = promisify(execFile);
 
 export const SYSTEM_UPDATE_CHECK_TTL_MS = 5 * 60_000;
+export const SYSTEM_UPDATE_STALE_LOCK_MS = 6 * 60 * 60_000;
 const SYSTEM_UPDATE_WRAPPER = "/usr/local/bin/aios-system-update";
 
 export interface SystemVersionInfo {
@@ -198,6 +199,19 @@ export async function writeSystemUpdateState(next: Partial<SystemUpdateState>): 
   return merged;
 }
 
+async function clearStaleSystemUpdateLock(state: SystemUpdateState): Promise<SystemUpdateState> {
+  if (!(state.inProgress || state.maintenance)) return state;
+  if (!state.startedAt || Date.now() - state.startedAt <= SYSTEM_UPDATE_STALE_LOCK_MS) return state;
+  return await writeSystemUpdateState({
+    inProgress: false,
+    maintenance: false,
+    stage: "failed",
+    message: null,
+    finishedAt: Date.now(),
+    lastError: "Cleared stale system update maintenance lock.",
+  });
+}
+
 async function resetSystemUpdateLog(): Promise<void> {
   const { log } = systemUpdatePaths();
   await mkdir(dirname(log), { recursive: true });
@@ -213,18 +227,18 @@ async function readLogTail(maxBytes = 12_000): Promise<string> {
   return raw.slice(raw.length - maxBytes);
 }
 
-function buildGitInvocation(repoUrl: string, creds = getGithubCreds()): GitInvocation {
+export function buildGitInvocation(repoUrl: string, creds = getGithubCreds()): GitInvocation {
   const baseEnv = buildCommonAuthEnv();
   if (creds?.mode === "deploy_key" && creds.privateKeyPath) {
-    const remoteUrl = repoUrl.startsWith("https://github.com/")
-      ? repoUrl.replace(/^https:\/\/github\.com\//, "git@github.com:")
-      : repoUrl;
+    if (repoUrl.startsWith("https://") || repoUrl.startsWith("http://")) {
+      return { env: baseEnv, remoteUrl: repoUrl };
+    }
     return {
       env: {
         ...baseEnv,
         GIT_SSH_COMMAND: `ssh -i "${creds.privateKeyPath}" -o StrictHostKeyChecking=accept-new`,
       },
-      remoteUrl,
+      remoteUrl: repoUrl,
     };
   }
   if (creds?.mode === "pat" && creds.username && creds.token) {
@@ -302,7 +316,7 @@ async function refreshUpdateState(
 export async function getSystemUpdateSnapshot(opts: { forceCheck?: boolean; refreshIfStale?: boolean } = {}): Promise<SystemUpdateSnapshot> {
   const current = await readSystemVersion();
   const updaterConfig = getSystemUpdaterConfig(current);
-  let state = await readSystemUpdateState(current);
+  let state = await clearStaleSystemUpdateLock(await readSystemUpdateState(current));
   if (updaterConfig.repoUrl && (opts.refreshIfStale || opts.forceCheck) && shouldRefresh(state, updaterConfig.repoUrl, updaterConfig.branch, !!opts.forceCheck)) {
     state = await refreshUpdateState(current, state, updaterConfig.repoUrl, updaterConfig.branch);
   }
@@ -323,7 +337,7 @@ function canStartUpdate(current: SystemVersionInfo | null, state: SystemUpdateSt
 }
 
 export async function isSystemUpdateBlocking(): Promise<boolean> {
-  const state = await readSystemUpdateState();
+  const state = await clearStaleSystemUpdateLock(await readSystemUpdateState());
   return !!(state.inProgress || state.maintenance);
 }
 

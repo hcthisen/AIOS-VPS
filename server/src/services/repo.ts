@@ -370,10 +370,10 @@ AIOS turns this Git repository into an autonomous operating workspace: the root 
 
 ## How AIOS Operates
 
-- Heartbeat: runs about once per minute after onboarding is complete. Each tick pulls the repo, runs sync, scans due cron tasks, evaluates active goals, and starts or queues runs if the target scope is free.
+- Heartbeat: runs about once per minute after onboarding is complete. Each tick pulls the repo, runs sync, scans due cron tasks, checks scheduled goal wakeups, and starts or queues runs if the target scope is free.
 - Sync: runs after each successful pull and after successful agent runs. It mirrors \`CLAUDE.md\` and \`AGENTS.md\`, copies root \`org.md\` into departments, regenerates \`_org.md\`, and mirrors \`skills/\` into provider-specific skill folders.
 - Cron: put scheduled prompts in \`cron/*.md\` with frontmatter like \`schedule: "0 * * * *"\`, optional \`provider\`, and optional \`paused: true\`. Pause jobs instead of deleting them.
-- Goals: put long-running objectives in \`goals/*.md\` with \`status: active|paused|complete\`, optional \`provider\`, and \`state: {}\`. Active goals are evaluated once per heartbeat, so the agent should do the next useful step or skip.
+- Goals: put long-running objectives in \`goals/*.md\` with \`status: active|paused|complete\`, \`schedule: "0 9 * * *"\`, optional \`provider\`, and \`state: {}\`. Goals are checked once per heartbeat but only run when their own schedule is due; use daily/weekly schedules for strategy or growth work and shorter intervals only for lightweight monitoring.
 - Skills: put reusable procedures in \`skills/<name>/SKILL.md\`. AIOS syncs them for both Claude Code and Codex so agents can reliably create, edit, and pause cron tasks and goals.
 - Root scope: root-level \`cron/\`, \`goals/\`, and \`skills/\` are for maintenance or cross-department work that should start from the repository root.
 `;
@@ -397,12 +397,23 @@ export async function ensureAutomationWorkspace(dir: string): Promise<string[]> 
   ];
   for (const [rel, body] of defaults) {
     const abs = join(dir, rel);
-    if (existsSync(abs)) continue;
+    if (existsSync(abs)) {
+      const current = await readFile(abs, "utf-8").catch(() => "");
+      if (!shouldRefreshDefaultSkill(rel, current)) continue;
+    }
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, body, "utf-8");
     changed.push(abs);
   }
   return changed;
+}
+
+function shouldRefreshDefaultSkill(rel: string, current: string): boolean {
+  if (!current.trim()) return true;
+  if (rel === "skills/goal-management/SKILL.md") {
+    return current.includes("Active goals are evaluated about once per heartbeat");
+  }
+  return false;
 }
 
 function buildCronManagementSkillMd(): string {
@@ -450,6 +461,7 @@ Goals live in \`goals/*.md\`. Each file is a prompt with YAML frontmatter.
 \`\`\`md
 ---
 status: active
+schedule: "0 9 * * *"
 provider: claude-code
 state: {}
 ---
@@ -461,7 +473,10 @@ Rules:
 - Never delete a goal. If it should stop running, set \`status: paused\`.
 - Mark a goal \`status: complete\` only when its definition of done is satisfied.
 - Keep \`state\` small and factual so future runs can resume without rereading unrelated history.
-- Active goals are evaluated about once per heartbeat, currently once per minute, so the prompt should allow the agent to skip when no useful work is due.
+- Each active goal has a \`schedule\` field that controls when AIOS wakes it up. AIOS checks goals every heartbeat, but only starts a goal when its own schedule is due.
+- Tune \`schedule\` to match the goal. Use daily, every-few-days, or weekly schedules for research, growth, and strategy work. Use shorter intervals only for lightweight monitoring.
+- Do not set wake intervals below 10 minutes unless the goal is very short monitoring work; frequent wakeups can create backlog and waste budget.
+- If no useful work is due when woken, exit cleanly after updating \`state\` only if that helps future runs.
 - Keep goals outcome-oriented; put recurring fixed-time work in cron instead.
 - Use \`provider: claude-code\` or \`provider: codex\` only when the goal needs a specific provider; otherwise omit it.
 `;

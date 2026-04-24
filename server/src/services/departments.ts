@@ -14,6 +14,7 @@ import {
 } from "./repo";
 
 export const ROOT_DEPARTMENT_NAME = "_root";
+export const DEFAULT_GOAL_SCHEDULE = "0 9 * * *";
 
 export interface CronTask {
   path: string;          // absolute file path
@@ -32,6 +33,7 @@ export interface Goal {
   department: string;
   name: string;
   status?: "active" | "paused" | "complete";
+  schedule: string;
   provider?: string;
   prompt: string;
   state?: Record<string, unknown>;
@@ -194,6 +196,7 @@ export async function listGoals(): Promise<Goal[]> {
           department: d.name,
           name: f.replace(/\.md$/, ""),
           status: (fm.status as any) || "active",
+          schedule: String(fm.schedule || fm.cron || DEFAULT_GOAL_SCHEDULE).trim() || DEFAULT_GOAL_SCHEDULE,
           provider: fm.provider,
           prompt: parsed.content.trim(),
           state: fm.state || {},

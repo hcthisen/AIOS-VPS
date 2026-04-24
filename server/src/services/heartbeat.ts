@@ -11,6 +11,7 @@ import { getSetupPhase } from "../setup-phase";
 import { isSystemUpdateBlocking } from "./systemUpdate";
 
 const DEFAULT_INTERVAL_MS = 60_000;
+export const MIN_GOAL_INTERVAL_MS = 10 * 60_000;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let running = false;
 let lastTickAt = 0;
@@ -87,15 +88,62 @@ export async function runHeartbeatTick() {
     }
   }
 
-  // Goals — evaluated once per heartbeat per active goal.
+  // Goals are scheduled wakeups. The heartbeat checks them every minute, but a
+  // goal only runs when its own schedule is due.
   const goals = await listGoals();
   for (const g of goals) {
     if (g.status !== "active") continue;
+    if (!isGoalScheduleAllowed(g.schedule)) {
+      log.warn(`goal schedule '${g.schedule}' in ${g.relPath} is below the 10 minute minimum; skipping`);
+      continue;
+    }
+    const state = db.prepare("SELECT * FROM goal_state WHERE path = ?").get(g.path) as { last_fired: number } | undefined;
+    const lastFired = state?.last_fired ?? 0;
+    let next: number;
+    try {
+      const it = cronParser.parseExpression(g.schedule, { currentDate: new Date(lastFired || now - 60_000) });
+      next = it.next().getTime();
+    } catch (e: any) {
+      log.warn(`invalid goal schedule '${g.schedule}' in ${g.relPath}`);
+      continue;
+    }
+    if (next > now) continue;
+
+    db.prepare(`INSERT INTO goal_state(path, last_fired) VALUES(?, ?)
+                ON CONFLICT(path) DO UPDATE SET last_fired=excluded.last_fired`).run(g.path, now);
     await startRun({
       departments: [g.department],
       trigger: `goal:${g.relPath}`,
-      prompt: `You are evaluating a goal. If it deserves action this cycle, do the next smallest useful step and update the goal file's state frontmatter. Otherwise, reply "skip" and do nothing.\n\n${g.prompt}`,
+      prompt: buildGoalWakePrompt(g),
       provider: (g.provider as any) || undefined,
     });
   }
+}
+
+export function isGoalScheduleAllowed(schedule: string, minIntervalMs = MIN_GOAL_INTERVAL_MS): boolean {
+  try {
+    const it = cronParser.parseExpression(schedule, { currentDate: new Date() });
+    const first = it.next().getTime();
+    const second = it.next().getTime();
+    return second - first >= minIntervalMs;
+  } catch {
+    return true;
+  }
+}
+
+export function buildGoalWakePrompt(goal: { relPath: string; schedule: string; prompt: string }): string {
+  return [
+    "You have been woken up to work on a long-running AIOS goal.",
+    "",
+    `Goal file: ${goal.relPath}`,
+    `Current wake schedule: ${goal.schedule}`,
+    "Minimum wake interval: 10 minutes. Prefer hourly, daily, or weekly schedules unless this is lightweight monitoring work.",
+    "",
+    "You may update this goal file, including its schedule, status, and state, when a different wake cadence better fits the goal.",
+    "Never delete this goal. If it should stop running, set status: paused. If it is done, set status: complete.",
+    "Take the next smallest useful step. If no useful work is due, update state only if helpful and exit.",
+    "",
+    "Goal:",
+    goal.prompt,
+  ].join("\n");
 }

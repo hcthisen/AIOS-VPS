@@ -7,6 +7,7 @@ AIOS_INSTALL_DIR="${AIOS_INSTALL_DIR:-/opt/aios}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SYSTEM_VERSION_PATH="${AIOS_INSTALL_DIR}/data/system-version.json"
 SUDOERS_FILE="/etc/sudoers.d/aios-systemctl"
+DEFAULT_SYSTEM_REPO_URL="${AIOS_SYSTEM_REPO_URL:-https://github.com/hcthisen/AIOS-VPS}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "must run as root" >&2
@@ -51,7 +52,7 @@ else
   exit 1
 fi
 
-python3 - "${SRC_DIR}" "${SYSTEM_VERSION_PATH}" <<'PY'
+python3 - "${SRC_DIR}" "${SYSTEM_VERSION_PATH}" "${DEFAULT_SYSTEM_REPO_URL}" <<'PY'
 import json
 import subprocess
 import sys
@@ -60,6 +61,7 @@ from pathlib import Path
 
 src_dir = Path(sys.argv[1])
 out_path = Path(sys.argv[2])
+default_repo_url = sys.argv[3]
 
 def git_value(*args):
     try:
@@ -76,7 +78,7 @@ def git_value(*args):
 payload = {
     "commit": git_value("rev-parse", "HEAD"),
     "branch": git_value("branch", "--show-current"),
-    "repoUrl": git_value("config", "--get", "remote.origin.url"),
+    "repoUrl": git_value("config", "--get", "remote.origin.url") or default_repo_url,
     "deployedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 }
 out_path.parent.mkdir(parents=True, exist_ok=True)

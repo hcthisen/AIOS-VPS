@@ -27,6 +27,7 @@ interface Goal {
   relPath: string;
   path: string;
   status: string;
+  schedule: string;
   provider?: string;
 }
 
@@ -79,6 +80,7 @@ interface GoalEditorState {
   relPath: string | null;
   name: string;
   status: string;
+  schedule: string;
   provider: string;
   prompt: string;
 }
@@ -196,7 +198,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
     }, setNotice);
 
   const openCreateGoal = () => setGoalEditor({
-    mode: "create", relPath: null, name: "", status: "active", provider: "", prompt: "",
+    mode: "create", relPath: null, name: "", status: "active", schedule: "0 9 * * *", provider: "", prompt: "",
   });
   const openEditGoal = async (goal: Goal) => {
     const text = await api<string>(fileUrl(goal.relPath)).catch(() => "");
@@ -206,6 +208,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       relPath: goal.relPath,
       name: goal.name,
       status: goal.status,
+      schedule: goal.schedule || "0 9 * * *",
       provider: goal.provider || "",
       prompt,
     });
@@ -216,7 +219,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       const prompt = goalEditor.prompt.trim();
       if (!prompt) throw new Error("prompt is required");
       const providerLine = goalEditor.provider ? `provider: ${goalEditor.provider}\n` : "";
-      const body = `---\nstatus: ${goalEditor.status}\n${providerLine}state: {}\n---\n\n${prompt}\n`;
+      const body = `---\nstatus: ${goalEditor.status}\nschedule: "${goalEditor.schedule}"\n${providerLine}state: {}\n---\n\n${prompt}\n`;
       const relPath = goalEditor.mode === "create"
         ? buildRelPath(name, "goals", goalEditor.name)
         : goalEditor.relPath!;
@@ -332,6 +335,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                 <thead>
                   <tr>
                     <th>Name</th>
+                    <th>Wake schedule</th>
                     <th>Status</th>
                     <th>Provider</th>
                     <th style={{ textAlign: "right" }}>Actions</th>
@@ -341,6 +345,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                   {d.goals.map((goal) => (
                     <tr key={goal.path}>
                       <td><b>{goal.name}</b></td>
+                      <td title={goal.schedule}>{describeCronSchedule(goal.schedule || "0 9 * * *")}</td>
                       <td>{goal.status}</td>
                       <td>{goal.provider || "-"}</td>
                       <td style={{ textAlign: "right" }}>
@@ -568,6 +573,11 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                 <option value="complete">complete</option>
               </select>
             </label>
+            <ScheduleField
+              label="Wake schedule"
+              value={goalEditor.schedule}
+              onChange={(schedule) => setGoalEditor({ ...goalEditor, schedule })}
+            />
             <label className="col">
               <span className="small muted">Provider</span>
               <select

@@ -111,11 +111,9 @@ EOF
       if [[ -z "${key_path}" ]]; then
         fail "deploy-key auth requested but no private key path was provided"
       fi
-      if [[ "${REPO_URL}" == https://github.com/* ]]; then
-        GIT_REMOTE_URL="${REPO_URL/https:\/\/github.com\//git@github.com:}"
-        PERSISTED_REMOTE_URL="${GIT_REMOTE_URL}"
+      if [[ "${REPO_URL}" != http://* && "${REPO_URL}" != https://* ]]; then
+        export GIT_SSH_COMMAND="ssh -i \"${key_path}\" -o StrictHostKeyChecking=accept-new"
       fi
-      export GIT_SSH_COMMAND="ssh -i \"${key_path}\" -o StrictHostKeyChecking=accept-new"
       ;;
     none)
       ;;

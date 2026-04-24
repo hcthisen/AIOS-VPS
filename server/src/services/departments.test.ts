@@ -11,6 +11,7 @@ import {
   ensureRootDepartmentName,
   getRootDepartment,
   listCronTasks,
+  listGoals,
   normalizeDepartmentName,
   updateRootDepartmentName,
 } from "./departments";
@@ -111,5 +112,22 @@ describe("departments", () => {
     const task = tasks.find((entry) => entry.department === "_root");
     assert.equal(task?.relPath, "cron/maintenance.md");
     assert.equal(task?.name, "maintenance");
+  });
+
+  it("defaults goals without schedules to a daily wakeup", async () => {
+    await mkdir(join(tempRoot, "sample", "goals"), { recursive: true });
+    await writeFile(join(tempRoot, "sample", "goals", "grow.md"), [
+      "---",
+      "status: active",
+      "state: {}",
+      "---",
+      "",
+      "Grow the channel.",
+      "",
+    ].join("\n"), "utf-8");
+
+    const goals = await listGoals();
+    const goal = goals.find((entry) => entry.relPath === "sample/goals/grow.md");
+    assert.equal(goal?.schedule, "0 9 * * *");
   });
 });
