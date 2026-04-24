@@ -7,10 +7,10 @@ import { dirname, join } from "path";
 import { timingSafeEqual } from "crypto";
 import matter from "gray-matter";
 
-import { Router, badRequest, notFound, AiosRequest } from "../http";
+import { Router, badRequest, conflict, notFound, AiosRequest } from "../http";
 import { adminOnly } from "../auth";
 import { config } from "../config";
-import { listDepartments, listCronTasks, listGoals } from "../services/departments";
+import { createDepartment, DepartmentCreateError, listDepartments, listCronTasks, listGoals } from "../services/departments";
 import { listRuns, getRun, activeRuns, listBacklog, runEvents, Run } from "../services/runs";
 import { listClaims } from "../services/claims";
 import { startRun, killRun, killAllRuns, setGlobalPause, isGlobalPaused, activeProcessCount } from "../services/executor";
@@ -33,6 +33,28 @@ export function registerDashboardRoutes(router: Router) {
         claim: claims.get(d.name) || null,
       })),
     });
+  });
+
+  router.post("/api/departments", async (req, res) => {
+    await guard(req, res);
+    try {
+      const department = await createDepartment({ name: String(req.body?.name || "") });
+      const sync = await runSyncLayer({ commit: false });
+      res.json({
+        ok: true,
+        department: {
+          name: department.name,
+          path: department.path,
+          claim: null,
+        },
+        sync,
+      }, 201);
+    } catch (e: any) {
+      if (e instanceof DepartmentCreateError) {
+        throw e.code === "conflict" ? conflict(e.message) : badRequest(e.message);
+      }
+      throw e;
+    }
   });
 
   router.get("/api/departments/:name", async (req, res) => {

@@ -291,7 +291,7 @@ ${parentLine}
 `;
 }
 
-function buildDepartmentContextMd(name: string): string {
+export function buildDepartmentContextMd(name: string): string {
   return `# ${name} department - Department responsible for ${name} work in this AIOS deployment
 
 One-line summary: ${name} is a department inside this AIOS deployment and owns the work routed into this folder.
