@@ -351,18 +351,6 @@ export async function startSystemUpdate(actorEmail: string): Promise<void> {
   if (snapshot.current?.commit && !snapshot.state.updateAvailable) {
     throw new Error("This AIOS-VPS deployment is already up to date.");
   }
-  await execFileAsync("sudo", ["-n", SYSTEM_UPDATE_WRAPPER, "--probe"], { env: process.env });
-  await resetSystemUpdateLog();
-  await writeSystemUpdateState({
-    inProgress: true,
-    maintenance: true,
-    stage: "starting",
-    message: `Update requested by ${actorEmail}`,
-    startedAt: Date.now(),
-    finishedAt: null,
-    lastError: null,
-  });
-
   const creds = getGithubCreds();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -394,6 +382,18 @@ export async function startSystemUpdate(actorEmail: string): Promise<void> {
     "AIOS_UPDATER_GITHUB_TOKEN",
     "AIOS_UPDATER_DEPLOY_KEY_PATH",
   ].join(",");
+
+  await execFileAsync("sudo", ["-n", `--preserve-env=${preserved}`, SYSTEM_UPDATE_WRAPPER, "--probe"], { env });
+  await resetSystemUpdateLog();
+  await writeSystemUpdateState({
+    inProgress: true,
+    maintenance: true,
+    stage: "starting",
+    message: `Update requested by ${actorEmail}`,
+    startedAt: Date.now(),
+    finishedAt: null,
+    lastError: null,
+  });
 
   try {
     const child = spawn("sudo", ["-n", `--preserve-env=${preserved}`, SYSTEM_UPDATE_WRAPPER], {

@@ -40,8 +40,8 @@ ${AIOS_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl enable caddy, \\
     /usr/bin/systemctl start caddy, \\
     /usr/bin/systemctl reload caddy, \\
     /usr/bin/systemctl restart caddy, \\
-    /usr/bin/systemctl restart aios, \\
-    /usr/local/bin/aios-system-update
+    /usr/bin/systemctl restart aios
+${AIOS_USER} ALL=(root) NOPASSWD: SETENV: /usr/local/bin/aios-system-update
 EOF
 if visudo -c -f "${SUDOERS_FILE}.tmp" >/dev/null; then
   mv "${SUDOERS_FILE}.tmp" "${SUDOERS_FILE}"
