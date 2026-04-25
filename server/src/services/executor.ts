@@ -21,6 +21,7 @@ import { gitRun } from "./repo";
 import { runSyncLayer } from "./sync";
 import { isSystemUpdateBlocking } from "./systemUpdate";
 import { displayProvider, isProviderAuthorized } from "./providerAvailability";
+import { processOwnerNotificationOutbox } from "./ownerNotifications";
 
 export type Provider = "claude-code" | "codex";
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access" | "bypass";
@@ -291,6 +292,9 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
 
   let commitSha: string | null = null;
   if (code === 0 && req.commitOnSuccess !== false) {
+    await processOwnerNotificationOutbox({ runId }).catch((e) => {
+      log.warn("owner notification outbox processing failed", runId, e?.message || e);
+    });
     await runSyncLayer({ commit: false }).catch((e) => {
       log.warn("sync after run failed", runId, e?.message || e);
     });

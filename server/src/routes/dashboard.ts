@@ -27,6 +27,11 @@ import { runSyncLayer } from "../services/sync";
 import { db } from "../db";
 import { heartbeatStatus, runHeartbeatTick } from "../services/heartbeat";
 import { displayProvider, getProviderAvailability, isProviderAuthorized, parseProvider } from "../services/providerAvailability";
+import {
+  deliverOwnerNotification,
+  listOwnerNotifications,
+  markOwnerNotificationRead,
+} from "../services/ownerNotifications";
 
 export function registerDashboardRoutes(router: Router) {
   const guard = adminOnly();
@@ -317,6 +322,40 @@ export function registerDashboardRoutes(router: Router) {
     const r = await startRun({ departments: [dept], trigger: `webhook:${endpoint}`, prompt });
     recordDelivery({ department: dept, endpoint, source, payload, outcome: r.accepted ? `run:${r.run.id}` : "queued" });
     res.json({ ok: true, runId: r.run.id, accepted: r.accepted });
+  });
+
+  // ---------- Owner notifications ----------
+  router.get("/api/notifications", async (req, res) => {
+    await guard(req, res);
+    res.json(listOwnerNotifications({
+      limit: Number(req.query.limit) || 50,
+      offset: Number(req.query.offset) || 0,
+      query: req.query.query || "",
+      scope: req.query.scope || "",
+      priority: req.query.priority || "",
+      status: req.query.status || "",
+    }));
+  });
+
+  router.post("/api/notifications/:id/read", async (req, res) => {
+    await guard(req, res);
+    const notification = markOwnerNotificationRead(Number(req.params.id), true);
+    if (!notification) throw notFound("notification not found");
+    res.json({ ok: true, notification });
+  });
+
+  router.post("/api/notifications/:id/unread", async (req, res) => {
+    await guard(req, res);
+    const notification = markOwnerNotificationRead(Number(req.params.id), false);
+    if (!notification) throw notFound("notification not found");
+    res.json({ ok: true, notification });
+  });
+
+  router.post("/api/notifications/:id/retry", async (req, res) => {
+    await guard(req, res);
+    const notification = await deliverOwnerNotification(Number(req.params.id));
+    if (!notification) throw notFound("notification not found");
+    res.json({ ok: true, notification });
   });
 
   // ---------- Controls ----------

@@ -61,8 +61,10 @@ describe("departments", () => {
       "cron/.gitkeep",
       "goals/.gitkeep",
       "webhooks/.gitkeep",
+      "outbox/.gitkeep",
       "skills/cron-management/SKILL.md",
       "skills/goal-management/SKILL.md",
+      "skills/outbox-notifications/SKILL.md",
     ]) {
       const s = await stat(join(tempRoot, "marketing-ops", rel));
       assert.ok(s.isFile());

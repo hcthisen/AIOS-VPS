@@ -110,6 +110,29 @@ CREATE TABLE IF NOT EXISTS telegram_agent_messages (
   error       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_telegram_agent_status ON telegram_agent_messages(status, id);
+
+CREATE TABLE IF NOT EXISTS owner_notifications (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_scope      TEXT NOT NULL,
+  source_path       TEXT NOT NULL,
+  content_hash      TEXT NOT NULL UNIQUE,
+  run_id            TEXT,
+  title             TEXT NOT NULL,
+  body              TEXT NOT NULL,
+  priority          TEXT NOT NULL DEFAULT 'info',
+  tags              TEXT NOT NULL DEFAULT '[]',
+  status            TEXT NOT NULL,
+  delivery_channel  TEXT NOT NULL DEFAULT 'none',
+  delivery_attempts INTEGER NOT NULL DEFAULT 0,
+  last_error        TEXT,
+  created_at        INTEGER NOT NULL,
+  delivered_at      INTEGER,
+  read_at           INTEGER,
+  raw_frontmatter   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_owner_notifications_created ON owner_notifications(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_owner_notifications_status ON owner_notifications(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_owner_notifications_scope ON owner_notifications(source_scope, created_at DESC);
 `);
 
 export function kvGet(k: string): string | null {

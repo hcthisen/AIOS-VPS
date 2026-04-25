@@ -9,6 +9,7 @@ import { join, dirname, relative, resolve, sep } from "path";
 import matter from "gray-matter";
 
 import { config } from "../config";
+import { outboxInstructionsBody } from "./outboxInstructionsBody";
 import { buildCommonAuthEnv } from "./provider-auth";
 import { cloneUrlWithPat, getGithubCreds, GithubCreds } from "./github";
 
@@ -294,6 +295,8 @@ ${parentLine}
 - Start from the local department folder and only leave it when the task clearly requires cross-department context or collaboration.
 - Use \`org.md\` to understand the larger business context.
 - Use \`_org.md\` to discover which sibling departments exist before reading outside the current folder.
+
+${managedOwnerNotificationsBlock()}
 `;
 }
 
@@ -322,7 +325,15 @@ One-line summary: ${name} is a department inside this AIOS deployment and owns t
 - Start from this folder's files and solve the task locally when possible.
 - If the task depends on another department, use \`_org.md\` to discover the right folder and then inspect that folder directly.
 - Do not assume shared knowledge that is not written in this folder, \`org.md\`, or the target department's files.
+
+${managedOwnerNotificationsBlock()}
 `;
+}
+
+function managedOwnerNotificationsBlock(): string {
+  return `<!-- aios:managed:owner-notifications start -->
+${outboxInstructionsBody()}
+<!-- aios:managed:owner-notifications end -->`;
 }
 
 function extractSection(content: string, heading: string): string | undefined {
@@ -375,16 +386,17 @@ AIOS turns this Git repository into an autonomous operating workspace: the root 
 - Cron: put scheduled prompts in \`cron/*.md\` with frontmatter like \`schedule: "0 * * * *"\`, optional \`provider\`, and optional \`paused: true\`. Pause jobs instead of deleting them.
 - Goals: put long-running objectives in \`goals/*.md\` with \`status: active|paused|complete\`, \`schedule: "0 9 * * *"\`, optional \`provider\`, and \`state: {}\`. Goals are checked once per heartbeat but only run when their own schedule is due; use daily/weekly schedules for strategy or growth work and shorter intervals only for lightweight monitoring.
 - Skills: put reusable procedures in \`skills/<name>/SKILL.md\`. AIOS syncs them for both Claude Code and Codex so agents can reliably create, edit, and pause cron tasks and goals.
-- Root scope: root-level \`cron/\`, \`goals/\`, and \`skills/\` are for maintenance or cross-department work that should start from the repository root.
+- Outbox: agents write owner-facing notifications to \`outbox/*.md\` only when explicitly requested or when an important incident happens. AIOS stores the message, clears the file, shows it in Overview, and delivers it through Telegram/email when configured.
+- Root scope: root-level \`cron/\`, \`goals/\`, \`skills/\`, and \`outbox/\` are for maintenance or cross-department work that should start from the repository root.
 `;
 }
 
 export async function ensureAutomationWorkspace(dir: string): Promise<string[]> {
   const changed: string[] = [];
-  for (const folder of ["cron", "goals", "skills", "webhooks", "logs"]) {
+  for (const folder of ["cron", "goals", "skills", "webhooks", "logs", "outbox"]) {
     await mkdir(join(dir, folder), { recursive: true });
   }
-  for (const file of ["cron/.gitkeep", "goals/.gitkeep", "webhooks/.gitkeep"]) {
+  for (const file of ["cron/.gitkeep", "goals/.gitkeep", "webhooks/.gitkeep", "outbox/.gitkeep"]) {
     const abs = join(dir, file);
     if (!existsSync(abs)) {
       await writeFile(abs, "", "utf-8");
@@ -394,6 +406,7 @@ export async function ensureAutomationWorkspace(dir: string): Promise<string[]> 
   const defaults: Array<[string, string]> = [
     ["skills/cron-management/SKILL.md", buildCronManagementSkillMd()],
     ["skills/goal-management/SKILL.md", buildGoalManagementSkillMd()],
+    ["skills/outbox-notifications/SKILL.md", buildOutboxNotificationsSkillMd()],
   ];
   for (const [rel, body] of defaults) {
     const abs = join(dir, rel);
@@ -479,6 +492,47 @@ Rules:
 - If no useful work is due when woken, exit cleanly after updating \`state\` only if that helps future runs.
 - Keep goals outcome-oriented; put recurring fixed-time work in cron instead.
 - Use \`provider: claude-code\` or \`provider: codex\` only when the goal needs a specific provider; otherwise omit it.
+`;
+}
+
+function buildOutboxNotificationsSkillMd(): string {
+  return `---
+name: outbox-notifications
+description: Create owner-facing AIOS notifications by writing markdown files to outbox/*.md for dashboard, Telegram, or email delivery.
+---
+# Outbox Notifications
+
+Use this skill when a task, cron job, goal, or direct owner request requires notifying the owner, or when an emergency or important incident happens.
+
+Agents must not call Telegram or email directly. Write a markdown file to \`outbox/*.md\`; AIOS stores it, deletes the outbox file, shows it on the dashboard, and delivers it through Telegram or email when configured.
+
+Only create an outbox notification when:
+- The prompt explicitly asks for a notification, report, briefing, or summary.
+- A cron job or goal explicitly says to send the owner a result.
+- There is an outage, security risk, billing risk, data-loss risk, failed automation needing owner action, or a problem you fixed that the owner should know about.
+
+Do not create notifications for routine successful work, normal progress, or healthy monitoring checks unless the prompt explicitly asks for that report.
+
+Conditional monitoring rule:
+- If everything is healthy, do not write an outbox file unless the prompt asked for an all-clear report.
+- If something is wrong, or was wrong and you fixed it, write one concise notification.
+
+Format:
+\`\`\`md
+---
+title: "Website outage fixed"
+priority: warning
+tags: [monitoring, website]
+---
+
+example.com was offline at 07:12, I restarted the service, and it is responding normally now.
+\`\`\`
+
+Rules:
+- Use \`priority: info\`, \`warning\`, or \`critical\`.
+- Keep messages short, factual, and owner-facing.
+- Never include secrets, tokens, credentials, or private keys.
+- Use a readable filename such as \`outbox/2026-04-25-website-outage-fixed.md\`.
 `;
 }
 

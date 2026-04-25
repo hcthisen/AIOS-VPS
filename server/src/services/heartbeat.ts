@@ -3,12 +3,13 @@
 import cronParser from "cron-parser";
 import { db } from "../db";
 import { log } from "../log";
-import { pullRepo } from "./repo";
+import { gitRun, pullRepo } from "./repo";
 import { listCronTasks, listGoals } from "./departments";
 import { startRun, isGlobalPaused } from "./executor";
 import { runSyncLayer } from "./sync";
 import { getSetupPhase } from "../setup-phase";
 import { isSystemUpdateBlocking } from "./systemUpdate";
+import { processOwnerNotificationOutbox, retryPendingOwnerNotifications } from "./ownerNotifications";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 export const MIN_GOAL_INTERVAL_MS = 10 * 60_000;
@@ -59,6 +60,14 @@ export async function runHeartbeatTick() {
     return;
   }
   await runSyncLayer().catch((e) => log.warn("sync after pull failed", e?.message || e));
+  const outbox = await processOwnerNotificationOutbox().catch((e) => {
+    log.warn("owner notification outbox processing failed", e?.message || e);
+    return null;
+  });
+  if (outbox?.deletedPaths.length) {
+    await commitOutboxCleanup().catch((e) => log.warn("owner notification cleanup commit failed", e?.message || e));
+  }
+  await retryPendingOwnerNotifications().catch((e) => log.warn("owner notification retry failed", e?.message || e));
 
   const now = Date.now();
 
@@ -118,6 +127,14 @@ export async function runHeartbeatTick() {
       provider: (g.provider as any) || undefined,
     });
   }
+}
+
+async function commitOutboxCleanup() {
+  await gitRun(["add", "-A"]);
+  const { stdout } = await gitRun(["status", "--porcelain"]);
+  if (!stdout.trim()) return;
+  await gitRun(["commit", "-m", "aios: process owner notifications"]);
+  await gitRun(["push", "origin", "HEAD"]).catch(() => {});
 }
 
 export function isGoalScheduleAllowed(schedule: string, minIntervalMs = MIN_GOAL_INTERVAL_MS): boolean {

@@ -17,6 +17,7 @@ import { ensureRootDepartmentName, getRootDepartment, listDepartments } from "./
 import { buildDefaultReadmeMd, ensureAutomationWorkspace, gitRun, rootDisplayNameFromYaml, readAiosYaml } from "./repo";
 import { log } from "../log";
 import { sendNotification } from "./notifications";
+import { applyOutboxInstructions } from "./outboxInstructions";
 
 async function writeIfChanged(path: string, content: string): Promise<boolean> {
   try {
@@ -87,12 +88,14 @@ export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }
   await mirrorClaudeAgents(config.repoDir, out);
   for (const dept of depts) await mirrorClaudeAgents(dept.path, out);
 
-  // 1b. Ensure root/departments have the standard automation folders and
-  // default non-destructive cron/goal skills. Existing skill files are not
-  // overwritten.
+  // 1b. Ensure root/departments have the standard automation folders,
+  // default non-destructive skills, and owner-notification instructions.
   for (const scope of scopes) {
     const changed = await ensureAutomationWorkspace(scope.path);
     out.changed.push(...changed);
+    if (await applyOutboxInstructions(scope.name)) {
+      out.changed.push(join(scope.path, "CLAUDE.md"), join(scope.path, "AGENTS.md"));
+    }
   }
   if (await ensureRootReadme(rootDisplayNameFromYaml(yaml))) {
     out.changed.push(join(config.repoDir, "README.md"));
