@@ -21,6 +21,12 @@ import {
   validateSystemUpdaterInput,
 } from "../services/systemUpdate";
 import { activeProcessCount } from "../services/executor";
+import {
+  getTelegramAgentStatus,
+  resetTelegramAgentSession,
+  saveTelegramAgentConfig,
+} from "../services/telegramAgent";
+import { pollTelegramUpdatesOnce } from "../services/telegramUpdates";
 
 function githubStatus() {
   const creds = getGithubCreds();
@@ -127,6 +133,33 @@ async function respondSystemUpdateStatus(res: any, opts: { forceCheck?: boolean;
 export function registerSettingsRoutes(router: Router) {
   const guard = adminOnly();
 
+  router.get("/api/settings/telegram-agent/status", async (req, res) => {
+    await guard(req, res);
+    res.json(await getTelegramAgentStatus());
+  });
+
+  router.post("/api/settings/telegram-agent/config", async (req, res) => {
+    await guard(req, res);
+    const provider = String(req.body?.provider || "").trim();
+    const parsedProvider = provider === "claude-code" || provider === "codex" ? provider : undefined;
+    if (provider && !parsedProvider) {
+      throw badRequest("provider must be claude-code or codex");
+    }
+    try {
+      res.json(await saveTelegramAgentConfig({
+        enabled: typeof req.body?.enabled === "boolean" ? req.body.enabled : undefined,
+        provider: parsedProvider,
+      }));
+    } catch (e: any) {
+      throw badRequest(String(e?.message || e));
+    }
+  });
+
+  router.post("/api/settings/telegram-agent/reset", async (req, res) => {
+    await guard(req, res);
+    res.json({ ok: true, ...resetTelegramAgentSession(), status: await getTelegramAgentStatus() });
+  });
+
   router.get("/api/settings/system-update/status", async (req, res) => {
     await guard(req, res);
     await respondSystemUpdateStatus(res, { refreshIfStale: true });
@@ -185,6 +218,7 @@ export function registerSettingsRoutes(router: Router) {
   router.get("/api/settings/notifications/telegram/pairing", async (req, res) => {
     await guard(req, res);
     try {
+      await pollTelegramUpdatesOnce({ timeout: 0, skipIfBusy: true });
       const pairing = await syncTelegramPairing();
       res.json({ ok: true, ...pairing });
     } catch (e: any) {

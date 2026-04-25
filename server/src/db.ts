@@ -94,6 +94,22 @@ CREATE TABLE IF NOT EXISTS goal_state (
   path       TEXT PRIMARY KEY,
   last_fired INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS telegram_agent_messages (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  update_id   INTEGER NOT NULL UNIQUE,
+  chat_id     TEXT NOT NULL,
+  text        TEXT NOT NULL,
+  status      TEXT NOT NULL,
+  run_id      TEXT,
+  provider    TEXT,
+  session_id  TEXT,
+  received_at INTEGER NOT NULL,
+  started_at  INTEGER,
+  finished_at INTEGER,
+  error       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_agent_status ON telegram_agent_messages(status, id);
 `);
 
 export function kvGet(k: string): string | null {

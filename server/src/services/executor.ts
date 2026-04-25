@@ -2,6 +2,7 @@
 // stdout/stderr to disk, commit + push on success, release claims, process backlog.
 
 import { spawn, ChildProcess } from "child_process";
+import { randomUUID } from "crypto";
 import { mkdir, writeFile, appendFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -19,6 +20,7 @@ import { claimDepartments, releaseClaimsForRun, expireStaleClaims } from "./clai
 import { gitRun } from "./repo";
 import { runSyncLayer } from "./sync";
 import { isSystemUpdateBlocking } from "./systemUpdate";
+import { displayProvider, isProviderAuthorized } from "./providerAvailability";
 
 export type Provider = "claude-code" | "codex";
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access" | "bypass";
@@ -30,6 +32,11 @@ export interface RunRequest {
   provider?: Provider;
   metadata?: Record<string, unknown>;
   commitOnSuccess?: boolean;
+  queueIfBusy?: boolean;
+  conversation?: {
+    source: "telegram";
+    sessionId?: string | null;
+  };
 }
 
 const activeProcesses = new Map<string, ChildProcess>();
@@ -105,12 +112,44 @@ function getCodexSandboxMode(): CodexSandboxMode {
   return "danger-full-access";
 }
 
-function cliArgs(provider: Provider, prompt: string): { bin: string; args: string[]; stdin?: string } {
+function codexResumeAccessArgs(sandbox: CodexSandboxMode): string[] {
+  if (sandbox === "bypass" || sandbox === "danger-full-access") {
+    return ["--dangerously-bypass-approvals-and-sandbox"];
+  }
+  if (sandbox === "workspace-write") return ["--full-auto"];
+  return [];
+}
+
+export interface ProviderConversationResult {
+  sessionId: string | null;
+  finalMessage: string | null;
+}
+
+export function cliArgs(provider: Provider, prompt: string, conversation?: RunRequest["conversation"]): { bin: string; args: string[]; stdin?: string } {
   // Both CLIs accept a headless prompt path. Use stdin to avoid argv-length/escape concerns.
   if (provider === "claude-code") {
+    if (conversation) {
+      const args = ["--print", "--permission-mode", "acceptEdits", "--output-format", "json"];
+      if (conversation.sessionId) args.push("--resume", conversation.sessionId);
+      else args.push("--session-id", randomUUID());
+      return { bin: "claude", args, stdin: prompt };
+    }
     return { bin: "claude", args: ["--print", "--permission-mode", "acceptEdits"], stdin: prompt };
   }
   const sandbox = getCodexSandboxMode();
+  if (conversation?.sessionId) {
+    const args = ["exec", "resume", "--json", "--skip-git-repo-check"];
+    args.push(...codexResumeAccessArgs(sandbox));
+    args.push(conversation.sessionId, "-");
+    return { bin: "codex", args, stdin: prompt };
+  }
+  if (conversation) {
+    const args = ["exec", "--json", "--skip-git-repo-check"];
+    if (sandbox === "bypass") args.push("--dangerously-bypass-approvals-and-sandbox");
+    else args.push("--sandbox", sandbox);
+    args.push("-");
+    return { bin: "codex", args, stdin: prompt };
+  }
   const args = ["exec", "--skip-git-repo-check"];
   if (sandbox === "bypass") args.push("--dangerously-bypass-approvals-and-sandbox");
   else args.push("--sandbox", sandbox);
@@ -121,6 +160,19 @@ function cliArgs(provider: Provider, prompt: string): { bin: string; args: strin
 export interface StartRunResult { run: Run; accepted: boolean; queued?: boolean; reason?: string; }
 
 export async function startRun(req: RunRequest): Promise<StartRunResult> {
+  if (req.provider && !(await isProviderAuthorized(req.provider))) {
+    return {
+      run: createRun({
+        department: req.departments[0] || "unknown",
+        trigger: req.trigger,
+        provider: req.provider,
+        prompt: req.prompt,
+        status: "canceled",
+      }),
+      accepted: false,
+      reason: `${displayProvider(req.provider)} is not authorized`,
+    };
+  }
   if (globalPaused) {
     return { run: createRun({ department: req.departments[0] || "unknown", trigger: req.trigger, provider: null, prompt: req.prompt, status: "canceled" }), accepted: false, reason: "global pause" };
   }
@@ -139,8 +191,18 @@ export async function startRun(req: RunRequest): Promise<StartRunResult> {
 
   const claimed = claimDepartments(depts, run.id);
   if (!claimed) {
+    if (req.queueIfBusy === false) {
+      updateRun(run.id, { status: "canceled", error: "department busy; not queued" });
+      return { run: getRun(run.id)!, accepted: false, reason: "department busy" };
+    }
     // Queue for the first conflicting dept (heartbeat will retry).
-    for (const d of depts) enqueueBacklog(d, req.trigger, { runId: run.id, prompt: req.prompt, provider: req.provider, departments: depts });
+    for (const d of depts) enqueueBacklog(d, req.trigger, {
+      runId: run.id,
+      prompt: req.prompt,
+      provider: req.provider,
+      departments: depts,
+      conversation: req.conversation,
+    });
     updateRun(run.id, { status: "queued", error: "department busy; queued to backlog" });
     return { run: getRun(run.id)!, accepted: false, queued: true };
   }
@@ -168,7 +230,7 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
   }
 
   const env = await buildRunEnv(provider, cwd);
-  const { bin, args, stdin } = cliArgs(provider, req.prompt);
+  const { bin, args, stdin } = cliArgs(provider, req.prompt, req.conversation);
 
   let child: ChildProcess;
   try {
@@ -193,8 +255,14 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
       pipe(chunk);
     });
   } else {
-    child.stdout?.on("data", pipe);
-    child.stderr?.on("data", pipe);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(Buffer.from(chunk));
+      pipe(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderrChunks.push(Buffer.from(chunk));
+      pipe(chunk);
+    });
   }
 
   if (stdin && child.stdin) {
@@ -217,6 +285,10 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
     }
   }
 
+  const conversation = req.conversation
+    ? parseProviderConversationResult(provider, Buffer.concat(stdoutChunks).toString("utf-8"))
+    : null;
+
   let commitSha: string | null = null;
   if (code === 0 && req.commitOnSuccess !== false) {
     await runSyncLayer({ commit: false }).catch((e) => {
@@ -237,10 +309,15 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
     error: code === 0 ? null : `exit ${code}${signal ? ` sig ${signal}` : ""}`,
     commitSha,
     status,
-  });
+  }, conversation);
 }
 
-async function finalize(runId: string, depts: string[], info: { exitCode: number; error?: string | null; commitSha?: string | null; status?: Run["status"] }) {
+async function finalize(
+  runId: string,
+  depts: string[],
+  info: { exitCode: number; error?: string | null; commitSha?: string | null; status?: Run["status"] },
+  conversation?: ProviderConversationResult | null,
+) {
   updateRun(runId, {
     status: info.status ?? (info.exitCode === 0 ? "succeeded" : "failed"),
     ended_at: Date.now(),
@@ -249,7 +326,7 @@ async function finalize(runId: string, depts: string[], info: { exitCode: number
     commit_sha: info.commitSha ?? null,
   });
   releaseClaimsForRun(runId);
-  runEvents.emit("run.finished", { runId });
+  runEvents.emit("run.finished", { runId, conversation: conversation || null });
 
   // Process any backlog items for these departments.
   for (const d of depts) {
@@ -262,6 +339,7 @@ async function finalize(runId: string, depts: string[], info: { exitCode: number
         trigger: `backlog:${next.trigger}`,
         prompt: payload.prompt,
         provider: payload.provider,
+        conversation: payload.conversation,
       });
     } catch (e: any) {
       log.warn("failed to dispatch backlog item", next.id, e?.message || e);
@@ -365,4 +443,36 @@ function normalizeExecText(text: string): string {
     .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
     .replace(/\r/g, "")
     .trim();
+}
+
+export function parseProviderConversationResult(provider: Provider, stdoutText: string): ProviderConversationResult {
+  if (provider === "claude-code") {
+    try {
+      const parsed = JSON.parse(stdoutText.trim());
+      return {
+        sessionId: typeof parsed?.session_id === "string" ? parsed.session_id : null,
+        finalMessage: typeof parsed?.result === "string" ? parsed.result.trim() || null : null,
+      };
+    } catch {
+      return { sessionId: null, finalMessage: null };
+    }
+  }
+
+  let sessionId: string | null = null;
+  let finalMessage: string | null = null;
+  for (const line of stdoutText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const event = JSON.parse(trimmed);
+      if (event?.type === "thread.started" && typeof event.thread_id === "string") {
+        sessionId = event.thread_id;
+      }
+      if (event?.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+        const text = event.item.text.trim();
+        if (text) finalMessage = text;
+      }
+    } catch {}
+  }
+  return { sessionId, finalMessage };
 }

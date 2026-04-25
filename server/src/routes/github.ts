@@ -18,6 +18,7 @@ import {
   sendNotification,
   syncTelegramPairing,
 } from "../services/notifications";
+import { pollTelegramUpdatesOnce } from "../services/telegramUpdates";
 import { buildCommonAuthEnv } from "../services/provider-auth";
 import { runSyncLayer } from "../services/sync";
 import { execFile } from "child_process";
@@ -191,6 +192,7 @@ export function registerOnboardingRoutes(router: Router) {
   router.get("/api/onboarding/notifications/telegram/pairing", async (req, res) => {
     await guard(req, res);
     try {
+      await pollTelegramUpdatesOnce({ timeout: 0, skipIfBusy: true });
       const pairing = await syncTelegramPairing();
       res.json({ ok: true, ...pairing });
     } catch (e: any) {

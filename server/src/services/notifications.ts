@@ -17,7 +17,7 @@ export interface TelegramPairingCandidate {
   seenAt: number;
 }
 
-interface TelegramPairingState {
+export interface TelegramPairingState {
   botToken: string;
   botName?: string;
   botUsername?: string;
@@ -43,7 +43,7 @@ export function getNotificationConfig(): NotificationConfig {
   }
 }
 
-function setTelegramPairingState(state: TelegramPairingState) {
+export function setTelegramPairingState(state: TelegramPairingState) {
   kvSet(TELEGRAM_PAIRING_KEY, JSON.stringify(state));
 }
 
@@ -63,7 +63,7 @@ interface TelegramBotProfile {
   username?: string;
 }
 
-interface TelegramUpdate {
+export interface TelegramUpdate {
   update_id: number;
   message?: any;
   edited_message?: any;
@@ -71,7 +71,7 @@ interface TelegramUpdate {
   edited_channel_post?: any;
 }
 
-async function telegramApi<T>(botToken: string, method: string, body?: Record<string, unknown>): Promise<T> {
+export async function telegramApi<T>(botToken: string, method: string, body?: Record<string, unknown>): Promise<T> {
   const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
     method: body ? "POST" : "GET",
     headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -91,7 +91,7 @@ async function telegramApi<T>(botToken: string, method: string, body?: Record<st
   return payload.result as T;
 }
 
-function pickMessage(update: TelegramUpdate): any | null {
+export function pickTelegramMessage(update: TelegramUpdate): any | null {
   return update.message || update.edited_message || update.channel_post || update.edited_channel_post || null;
 }
 
@@ -108,7 +108,7 @@ function joinName(parts: Array<string | undefined>): string | undefined {
 }
 
 function describeTelegramCandidate(update: TelegramUpdate): TelegramPairingCandidate | null {
-  const message = pickMessage(update);
+  const message = pickTelegramMessage(update);
   const chat = message?.chat;
   if (!chat?.id) return null;
 
@@ -171,21 +171,57 @@ function mergeTelegramCandidates(
 
 export async function primeTelegramPairing(botToken: string): Promise<{ botName?: string; botUsername?: string }> {
   const profile = await telegramApi<TelegramBotProfile>(botToken, "getMe");
-  const updates = await telegramApi<TelegramUpdate[]>(botToken, "getUpdates", {
-    timeout: 0,
-    limit: 100,
-    allowed_updates: ["message", "edited_message", "channel_post", "edited_channel_post"],
-  });
-  const nextOffset = updates.reduce((max, update) => Math.max(max, update.update_id + 1), 0);
+  const existing = getTelegramPairingState();
   setTelegramPairingState({
     botToken,
     botName: profile.first_name,
     botUsername: profile.username,
-    candidates: [],
-    offset: nextOffset,
+    candidates: existing?.botToken === botToken ? existing.candidates : [],
+    offset: existing?.botToken === botToken ? existing.offset : 0,
     updatedAt: Date.now(),
   });
   return { botName: profile.first_name, botUsername: profile.username };
+}
+
+export function recordTelegramPairingUpdates(botToken: string, updates: TelegramUpdate[]): TelegramPairingState | null {
+  const state = getTelegramPairingState();
+  if (!state || state.botToken !== botToken) return state;
+  const candidates = updates
+    .map(describeTelegramCandidate)
+    .filter((candidate): candidate is TelegramPairingCandidate => !!candidate);
+  const nextOffset = updates.reduce((max, update) => Math.max(max, update.update_id + 1), state.offset);
+  const next = {
+    ...state,
+    candidates: mergeTelegramCandidates(state.candidates, candidates),
+    offset: nextOffset,
+    updatedAt: Date.now(),
+  };
+  setTelegramPairingState(next);
+  return next;
+}
+
+export function getTelegramPairingSnapshot(): {
+  botName?: string;
+  botUsername?: string;
+  candidates: TelegramPairingCandidate[];
+  pairedChatId: string | null;
+} {
+  const config = getNotificationConfig();
+  if (config.channel !== "telegram" || !config.botToken) {
+    throw new Error("save a Telegram bot token first");
+  }
+
+  const state = getTelegramPairingState();
+  if (!state) {
+    throw new Error("Telegram pairing is not initialized");
+  }
+
+  return {
+    botName: state.botName,
+    botUsername: state.botUsername,
+    candidates: state.candidates,
+    pairedChatId: config.chatId || null,
+  };
 }
 
 export async function syncTelegramPairing(): Promise<{
@@ -198,42 +234,11 @@ export async function syncTelegramPairing(): Promise<{
   if (config.channel !== "telegram" || !config.botToken) {
     throw new Error("save a Telegram bot token first");
   }
-
   let state = getTelegramPairingState();
   if (!state || state.botToken !== config.botToken) {
     await primeTelegramPairing(config.botToken);
-    state = getTelegramPairingState();
   }
-  if (!state) {
-    throw new Error("Telegram pairing is not initialized");
-  }
-
-  const updates = await telegramApi<TelegramUpdate[]>(config.botToken, "getUpdates", {
-    offset: state.offset,
-    timeout: 0,
-    limit: 50,
-    allowed_updates: ["message", "edited_message", "channel_post", "edited_channel_post"],
-  });
-
-  const candidates = updates
-    .map(describeTelegramCandidate)
-    .filter((candidate): candidate is TelegramPairingCandidate => !!candidate);
-  const nextOffset = updates.reduce((max, update) => Math.max(max, update.update_id + 1), state.offset);
-
-  state = {
-    ...state,
-    candidates: mergeTelegramCandidates(state.candidates, candidates),
-    offset: nextOffset,
-    updatedAt: Date.now(),
-  };
-  setTelegramPairingState(state);
-
-  return {
-    botName: state.botName,
-    botUsername: state.botUsername,
-    candidates: state.candidates,
-    pairedChatId: config.chatId || null,
-  };
+  return getTelegramPairingSnapshot();
 }
 
 export function approveTelegramPairing(chatId: string): TelegramPairingCandidate {
@@ -258,6 +263,14 @@ export async function sendNotification(message: string, subject = "AIOS"): Promi
   if (config.channel === "telegram") return sendTelegram(config, message);
   if (config.channel === "email") return sendEmail(config, subject, message);
   return { ok: false, error: "unknown notification channel" };
+}
+
+export async function sendTelegramMessage(chatId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+  const config = getNotificationConfig();
+  if (config.channel !== "telegram" || !config.botToken) {
+    return { ok: false, error: "Telegram notifications are not configured" };
+  }
+  return sendTelegram({ ...config, chatId }, text);
 }
 
 async function sendTelegram(

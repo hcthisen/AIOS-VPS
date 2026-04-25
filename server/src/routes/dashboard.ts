@@ -26,6 +26,7 @@ import { startRun, killRun, killAllRuns, setGlobalPause, isGlobalPaused, activeP
 import { runSyncLayer } from "../services/sync";
 import { db } from "../db";
 import { heartbeatStatus, runHeartbeatTick } from "../services/heartbeat";
+import { displayProvider, getProviderAvailability, isProviderAuthorized, parseProvider } from "../services/providerAvailability";
 
 export function registerDashboardRoutes(router: Router) {
   const guard = adminOnly();
@@ -213,7 +214,12 @@ export function registerDashboardRoutes(router: Router) {
     await guard(req, res);
     const dept = String(req.body?.department || "").trim();
     const prompt = String(req.body?.prompt || "").trim();
-    const provider = req.body?.provider;
+    const providerRaw = req.body?.provider;
+    const provider = parseProvider(providerRaw);
+    if (providerRaw && !provider) throw badRequest("provider must be claude-code or codex");
+    if (provider && !(await isProviderAuthorized(provider))) {
+      throw badRequest(`${displayProvider(provider)} is not authorized`);
+    }
     if (!dept || !prompt) throw badRequest("department and prompt required");
     const r = await startRun({
       departments: [dept],
@@ -332,10 +338,15 @@ export function registerDashboardRoutes(router: Router) {
   });
   router.get("/api/controls/status", async (req, res) => {
     await guard(req, res);
+    const providers = await getProviderAvailability();
     res.json({
       paused: isGlobalPaused(),
       activeProcesses: activeProcessCount(),
       heartbeat: heartbeatStatus(),
+      providers: {
+        claudeCode: { authorized: providers["claude-code"] },
+        codex: { authorized: providers.codex },
+      },
     });
   });
   router.post("/api/controls/sync", async (req, res) => {
@@ -397,11 +408,28 @@ export function registerDashboardRoutes(router: Router) {
     const content = typeof req.body === "string" ? req.body
       : req.rawBody ? req.rawBody.toString("utf-8")
       : JSON.stringify(req.body);
+    await validateProviderFrontmatter(rel, content);
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, content);
     await runSyncLayer({ commit: false }).catch(() => {});
     res.json({ ok: true });
   });
+}
+
+async function validateProviderFrontmatter(relPath: string, content: string) {
+  if (!/(^|\/)(cron|goals)\/[^/]+\.md$/i.test(relPath.replace(/\\/g, "/"))) return;
+  let provider: string | undefined;
+  try {
+    provider = matter(content).data?.provider;
+  } catch {
+    return;
+  }
+  if (!provider) return;
+  const parsed = parseProvider(provider);
+  if (!parsed) throw badRequest("provider must be claude-code or codex");
+  if (!(await isProviderAuthorized(parsed))) {
+    throw badRequest(`${displayProvider(parsed)} is not authorized`);
+  }
 }
 
 function recordDelivery(d: { department: string; endpoint: string; source?: string | null; payload: unknown; outcome: string }) {

@@ -13,6 +13,8 @@ import { registerSettingsRoutes } from "./routes/settings";
 import { attachTerminal } from "./terminal";
 import { startHeartbeat } from "./services/heartbeat";
 import { maybeServePublicObject } from "./services/publicBaseUrl";
+import { startTelegramAgent } from "./services/telegramAgent";
+import { startTelegramUpdates } from "./services/telegramUpdates";
 
 async function main() {
   const router = new Router();
@@ -42,6 +44,8 @@ async function main() {
 
   // Heartbeat kicks in automatically; it self-gates on setupPhase === "complete".
   startHeartbeat();
+  startTelegramUpdates();
+  startTelegramAgent();
 
   // Graceful shutdown
   const shutdown = (sig: string) => {

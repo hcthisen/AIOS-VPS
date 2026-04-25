@@ -88,6 +88,7 @@ interface GoalEditorState {
 export function DepartmentDetail({ name, navigate }: { name: string; navigate: (t: string) => void }) {
   const isRootScope = name === "_root";
   const [d, setD] = useState<Department | null>(null);
+  const [providers, setProviders] = useState<any>(null);
   const [tab, setTabState] = useState<TabId>(() => readTabFromUrl());
   const [filesQuery, setFilesQueryState] = useState<FilesQuery>(() => readFilesQueryFromUrl());
   const [notice, setNotice] = useState<string | null>(null);
@@ -134,6 +135,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
 
   useEffect(() => {
     refresh().catch((e) => setNotice(e?.message || String(e)));
+    api("/api/controls/status").then((r: any) => setProviders(r.providers)).catch(() => {});
     const timer = setInterval(() => {
       if (dirtyRef.current) return;
       refresh().catch(() => {});
@@ -244,6 +246,14 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
   }, [d?.claim]);
 
   if (!d) return <div className="muted">Loading...</div>;
+
+  const claudeAuthorized = !!providers?.claudeCode?.authorized;
+  const codexAuthorized = !!providers?.codex?.authorized;
+  const hasAuthorizedProvider = claudeAuthorized || codexAuthorized;
+  const cronProviderAuthorized = !cronEditor?.provider
+    || (cronEditor.provider === "claude-code" ? claudeAuthorized : codexAuthorized);
+  const goalProviderAuthorized = !goalEditor?.provider
+    || (goalEditor.provider === "claude-code" ? claudeAuthorized : codexAuthorized);
 
   const tabs = [
     { id: "tasks", label: `Tasks${d.cron?.length ? ` (${d.cron.length})` : ""}` },
@@ -490,6 +500,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
               workingLabel="Saving..."
               okLabel="Saved"
               onClick={saveCron}
+              disabled={!hasAuthorizedProvider || !cronProviderAuthorized}
             />
           </>
         )}
@@ -516,10 +527,12 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                 onChange={(e) => setCronEditor({ ...cronEditor, provider: e.target.value })}
               >
                 <option value="">Default provider</option>
-                <option value="claude-code">Claude Code</option>
-                <option value="codex">Codex</option>
+                <option value="claude-code" disabled={!claudeAuthorized}>Claude Code{claudeAuthorized ? "" : " (not connected)"}</option>
+                <option value="codex" disabled={!codexAuthorized}>Codex{codexAuthorized ? "" : " (not connected)"}</option>
               </select>
             </label>
+            {!hasAuthorizedProvider && <div className="small muted">Connect Claude Code or Codex in Settings before scheduling agents.</div>}
+            {cronEditor.provider && !cronProviderAuthorized && <div className="small muted">Selected provider is not connected. Pick an authorized provider or use default.</div>}
             <label className="col drawer-fill">
               <span className="small muted">Prompt</span>
               <textarea
@@ -547,6 +560,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
               workingLabel="Saving..."
               okLabel="Saved"
               onClick={saveGoal}
+              disabled={!hasAuthorizedProvider || !goalProviderAuthorized}
             />
           </>
         )}
@@ -585,10 +599,12 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                 onChange={(e) => setGoalEditor({ ...goalEditor, provider: e.target.value })}
               >
                 <option value="">Default provider</option>
-                <option value="claude-code">Claude Code</option>
-                <option value="codex">Codex</option>
+                <option value="claude-code" disabled={!claudeAuthorized}>Claude Code{claudeAuthorized ? "" : " (not connected)"}</option>
+                <option value="codex" disabled={!codexAuthorized}>Codex{codexAuthorized ? "" : " (not connected)"}</option>
               </select>
             </label>
+            {!hasAuthorizedProvider && <div className="small muted">Connect Claude Code or Codex in Settings before scheduling agents.</div>}
+            {goalEditor.provider && !goalProviderAuthorized && <div className="small muted">Selected provider is not connected. Pick an authorized provider or use default.</div>}
             <label className="col drawer-fill">
               <span className="small muted">Prompt</span>
               <textarea

@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api";
 import { Section } from "../components/Section";
 import { SystemUpdatePanel } from "../components/SystemUpdatePanel";
+import { TelegramAgentPanel } from "../components/TelegramAgentPanel";
 import { ProviderAuth } from "./ProviderAuth";
 import { GithubSetup } from "./GithubSetup";
 import { NotificationsSetup } from "./NotificationsSetup";
@@ -31,6 +32,8 @@ export function SettingsPage() {
       <GithubSetup mode="settings" basePath="/api/settings/github" />
 
       <NotificationsSetup mode="settings" basePath="/api/settings/notifications" />
+
+      <TelegramAgentPanel />
 
       <Section
         title="Controls"
