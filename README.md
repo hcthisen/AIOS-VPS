@@ -49,30 +49,24 @@ Internet ──▶ Caddy (80/443) ──▶ aios server (:3100)
 
 ## Quickstart (VPS deploy)
 
-See [`DEPLOY.md`](./DEPLOY.md) for the full walkthrough. The short version:
+See [`DEPLOY.md`](./DEPLOY.md) for the full walkthrough. The deployment command is intentionally one pasteable command:
 
 1. **Provision** an Ubuntu/Debian VPS. Open TCP ports **80, 443, 3100**.
-2. **Bootstrap** as root:
+2. **Install and deploy**:
    ```bash
-   git clone <this-repo> /tmp/aios-vps && cd /tmp/aios-vps
-   sudo bash scripts/vps-bootstrap.sh
+   curl -fsSL https://raw.githubusercontent.com/hcthisen/AIOS-VPS/main/scripts/install.sh | sudo bash
    ```
-3. **Deploy the app:**
-   ```bash
-   sudo bash scripts/deploy-app.sh
-   sudo systemctl enable --now aios
-   ```
-4. **Sign up** as first admin at `http://<vps-ip>:3100` and walk through the onboarding wizard:
+3. **Sign up** as first admin at `http://<vps-ip>:3100` and walk through the onboarding wizard:
    - attach a domain (Caddy auto-provisions HTTPS)
    - authenticate Claude Code and/or Codex (OAuth PKCE / device auth)
    - connect GitHub, create or attach a repo
    - configure notifications (Telegram or email)
-5. **Later changes** live in `Settings`:
+4. **Later changes** live in `Settings`:
    - re-authorize Claude Code or Codex
    - reconnect GitHub
    - update notifications
    - apply future AIOS-VPS updates in place
-6. **Done.** First scheduled task runs within one heartbeat cycle.
+5. **Done.** First scheduled task runs within one heartbeat cycle.
 
 Target: fresh VPS to first scheduled run in under 15 minutes, first real task within an hour.
 
@@ -80,6 +74,7 @@ Target: fresh VPS to first scheduled run in under 15 minutes, first real task wi
 
 ```
 /scripts     bootstrap scripts, systemd units
+  install.sh             one-command VPS install + deploy
   vps-bootstrap.sh       idempotent VPS bootstrap (root)
   deploy-app.sh          build + rsync server & ui into /opt/aios
   backup-restore.sh      tar+restore repo, state, credentials, Caddyfile

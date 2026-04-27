@@ -2,10 +2,8 @@
 # AIOS-VPS bootstrap installer.
 # Idempotent, re-run safe. Turns a fresh Ubuntu/Debian VPS into an AIOS host.
 #
-# Usage (as root):
-#   curl -fsSL .../vps-bootstrap.sh | sudo bash
-#   # or, from a local checkout:
-#   sudo ./scripts/vps-bootstrap.sh
+# Usage (as root, via the one-command installer):
+#   curl -fsSL https://raw.githubusercontent.com/hcthisen/AIOS-VPS/main/scripts/install.sh | sudo bash
 #
 # Env overrides:
 #   AIOS_USER        (default: aios)

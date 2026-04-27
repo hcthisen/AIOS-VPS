@@ -6,37 +6,27 @@ Target: fresh VPS to first scheduled task in under 15 minutes.
 
 Ubuntu 22.04+ (or Debian 12). Open TCP **80, 443, 3100**.
 
-## 2. Bootstrap as root
+## 2. Install and deploy with one command
 
-From a local checkout (recommended while iterating):
+SSH into the VPS as `root` or as an admin user with sudo, then paste exactly this:
 
 ```bash
-git clone https://github.com/<you>/AIOS-VPS.git /tmp/aios-vps
-cd /tmp/aios-vps
-sudo bash scripts/vps-bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/hcthisen/AIOS-VPS/main/scripts/install.sh | sudo bash
 ```
 
-After bootstrap:
+This command uses `https://github.com/hcthisen/AIOS-VPS` as the AIOS-VPS source repository. It installs prerequisites, clones or refreshes the source checkout under `/var/lib/aios/system-src`, runs bootstrap, builds the server and UI, deploys them to `/opt/aios`, and enables the `aios` systemd service.
+
+After it completes:
 
 - `aios` user exists (`/home/aios`)
 - Node.js LTS, git, Caddy, `aws`, `claude`, `codex` are installed
 - Caddy is **stopped and disabled** (the dashboard starts it after domain setup)
-- systemd unit `/etc/systemd/system/aios.service` is installed but not yet started (no app code yet)
+- systemd unit `/etc/systemd/system/aios.service` is installed and running
 - Narrow sudoers lets `aios` run exactly: `systemctl enable/start/reload caddy`, `systemctl restart aios`, and the self-update wrapper
 - Firewall opens 80, 443, 3100
+- app code is deployed to `/opt/aios`
 
-## 3. Deploy the app
-
-From the same checkout, as root:
-
-```bash
-sudo AIOS_USER=aios AIOS_INSTALL_DIR=/opt/aios bash scripts/deploy-app.sh
-sudo systemctl enable --now aios
-```
-
-This builds `server/` and `ui/`, rsyncs them into `/opt/aios`, and restarts the systemd unit.
-
-## 4. First-admin signup
+## 3. First-admin signup
 
 Visit `http://<vps-ip>:3100`. The page prompts you to create the first admin. After that the onboarding wizard runs through:
 
@@ -51,9 +41,9 @@ After onboarding, `Settings` can be used to:
 - re-authorize Claude Code or Codex
 - reconnect GitHub
 - update notifications
-- apply future AIOS-VPS updates in place. The updater source defaults to `https://github.com/hcthisen/AIOS-VPS` and can be changed in Settings.
+- apply future AIOS-VPS updates in place from `https://github.com/hcthisen/AIOS-VPS`
 
-## 5. Verify
+## 4. Verify
 
 ```bash
 # Server is up
@@ -69,19 +59,19 @@ curl -s http://localhost:3100/api/controls/status -H "Cookie: aios_session=…" 
 
 The sample department has `sample/cron/hello.md` set to `0 * * * *`. Edit the file to `* * * * *` (push to GitHub) and a run appears within one heartbeat.
 
-## 6. Upgrade
+## 5. Upgrade
 
 Once this release (or newer) is deployed, future upgrades can be started from `Settings -> System update`.
 
+For terminal upgrades, the same one-command installer is idempotent and safe to re-run:
+
 ```bash
-cd /tmp/aios-vps
-git pull
-sudo bash scripts/deploy-app.sh
+curl -fsSL https://raw.githubusercontent.com/hcthisen/AIOS-VPS/main/scripts/install.sh | sudo bash
 ```
 
-`deploy-app.sh` rsyncs the new build, refreshes the self-update wrapper/sudoers entry, writes the deployed version manifest, and restarts `aios`. The bootstrap script is idempotent — re-run safely if you change it.
+The installer refreshes `/var/lib/aios/system-src`, reruns the idempotent bootstrap, rebuilds, deploys, writes the deployed version manifest, and restarts `aios`.
 
-## 7. Backup / restore
+## 6. Backup / restore
 
 ```bash
 sudo scripts/backup-restore.sh backup  /root/aios-$(date +%F).tar.gz

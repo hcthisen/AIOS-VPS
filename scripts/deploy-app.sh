@@ -8,7 +8,7 @@ AIOS_DEPLOY_SKIP_RESTART="${AIOS_DEPLOY_SKIP_RESTART:-0}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SYSTEM_VERSION_PATH="${AIOS_INSTALL_DIR}/data/system-version.json"
 SUDOERS_FILE="/etc/sudoers.d/aios-systemctl"
-DEFAULT_SYSTEM_REPO_URL="${AIOS_SYSTEM_REPO_URL:-https://github.com/hcthisen/AIOS-VPS}"
+DEFAULT_SYSTEM_REPO_URL="https://github.com/hcthisen/AIOS-VPS"
 
 if [[ $EUID -ne 0 ]]; then
   echo "must run as root" >&2
