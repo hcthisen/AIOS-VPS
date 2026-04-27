@@ -37,6 +37,8 @@ Visit `http://<vps-ip>:3100`. The page prompts you to create the first admin. Af
 5. **Notifications** — Telegram or SMTP. "Save and send test" verifies end-to-end.
 6. **Complete** — `setupPhase = complete`, the heartbeat begins ticking, and the main dashboard is reachable.
 
+When using a PAT, AIOS automatically creates or updates a GitHub `push` webhook for the connected repo. The webhook points to `/github/webhook` on the configured dashboard URL and uses an AIOS-managed HMAC secret. If the webhook cannot be created because the PAT lacks repo admin/webhook permission, AIOS still falls back to polling GitHub every 60 seconds.
+
 After onboarding, `Settings` can be used to:
 - re-authorize Claude Code or Codex
 - reconnect GitHub

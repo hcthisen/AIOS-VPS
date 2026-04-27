@@ -4,9 +4,10 @@ import { join } from "path";
 import { Router, badRequest } from "../http";
 import { adminOnly } from "../auth";
 import {
-  setGithubCreds, getGithubCreds, verifyPat, listRepos, createRepo,
+  setGithubCreds, getGithubCreds, verifyPat, listRepos, createRepo, ensureGitHubPushWebhook,
 } from "../services/github";
 import { config } from "../config";
+import { log } from "../log";
 import { cloneRepo, scaffoldRepo, validateAiosRepo, gitRun, repoHead, readRepoContext, writeRepoContext } from "../services/repo";
 import { advanceSetupPhase, getSetupPhase, setSetupPhase } from "../setup-phase";
 import {
@@ -24,6 +25,13 @@ import { runSyncLayer } from "../services/sync";
 import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
+
+async function ensurePushWebhook(token: string, fullName: string) {
+  const result = await ensureGitHubPushWebhook(token, fullName);
+  if (!result.ok) log.warn(`github webhook setup failed for ${fullName}: ${result.error}`);
+  else log.info(`github webhook ${result.action} for ${fullName}: ${result.url}`);
+  return result;
+}
 
 export function registerOnboardingRoutes(router: Router) {
   const guard = adminOnly();
@@ -97,8 +105,9 @@ export function registerOnboardingRoutes(router: Router) {
     } catch (e: any) {
       // non-fatal; operator can retry push
     }
+    const webhook = await ensurePushWebhook(creds.token, r.fullName);
     if (getSetupPhase() === "repo_setup") advanceSetupPhase("repo_setup");
-    res.json({ ok: true, fullName: r.fullName, commit: await repoHead(), setupPhase: getSetupPhase() });
+    res.json({ ok: true, fullName: r.fullName, commit: await repoHead(), webhook, setupPhase: getSetupPhase() });
   });
 
   router.post("/api/onboarding/repo/attach", async (req, res) => {
@@ -112,8 +121,9 @@ export function registerOnboardingRoutes(router: Router) {
     if (!clone.ok) throw badRequest(`clone failed: ${clone.error}`);
     const v = await validateAiosRepo(config.repoDir);
     if (!v.ok) throw badRequest(v.error || "validation failed");
+    const webhook = await ensurePushWebhook(creds.token, fullName);
     if (getSetupPhase() === "repo_setup") advanceSetupPhase("repo_setup");
-    res.json({ ok: true, fullName, yaml: v.yaml, setupPhase: getSetupPhase() });
+    res.json({ ok: true, fullName, yaml: v.yaml, webhook, setupPhase: getSetupPhase() });
   });
 
   router.get("/api/onboarding/repo/status", async (req, res) => {

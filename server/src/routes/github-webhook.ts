@@ -1,10 +1,11 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
 import { badRequest, Router, unauthorized } from "../http";
+import { githubWebhookSecret } from "../services/github";
 import { checkRemoteForUpdates, markInboundSyncPending, reconcilePendingRepoSync } from "../services/repo";
 
 function webhookSecret(): string {
-  return String(process.env.AIOS_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || "").trim();
+  return githubWebhookSecret();
 }
 
 function verifySignature(raw: Buffer | undefined, header: string | string[] | undefined, secret: string): boolean {

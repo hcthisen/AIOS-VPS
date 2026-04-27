@@ -17,6 +17,7 @@ See [`AIOS-PRD.md`](./AIOS-PRD.md) for the full product specification.
 - Department folders (`CLAUDE.md`, `cron/`, `goals/`, `skills/`, `.env`, `logs/`)
 - Per-folder claims with backlog queue
 - Two-way GitHub sync (pull before run, commit + push after)
+- GitHub push webhook registration when using a PAT, with 60-second polling fallback
 - System-managed sync layer: `CLAUDE.md ↔ AGENTS.md`, `org.md` propagation, auto-generated `_org.md`
 - Provider-neutral execution (Claude Code or Codex, selectable per task)
 - Telegram / email notifications

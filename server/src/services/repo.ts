@@ -62,7 +62,7 @@ export interface GitSyncStatus {
   lastConflictResolution: string | null;
 }
 
-const DEFAULT_REMOTE_POLL_INTERVAL_MS = Number(process.env.AIOS_GIT_POLL_INTERVAL_MS || 5 * 60_000);
+const DEFAULT_REMOTE_POLL_INTERVAL_MS = Number(process.env.AIOS_GIT_POLL_INTERVAL_MS || 60_000);
 const LLM_CONFLICT_TIMEOUT_MS = Number(process.env.AIOS_GIT_CONFLICT_TIMEOUT_MS || 5 * 60_000);
 const LLM_CONFLICT_MAX_FILE_BYTES = Number(process.env.AIOS_GIT_CONFLICT_MAX_FILE_BYTES || 200_000);
 let worktreeBlocked = () => false;

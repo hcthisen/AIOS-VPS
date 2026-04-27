@@ -4,7 +4,8 @@ import { join } from "path";
 import { adminOnly } from "../auth";
 import { config } from "../config";
 import { badRequest, conflict, Router } from "../http";
-import { getGithubCreds, setGithubCreds, verifyPat } from "../services/github";
+import { currentGitHubRepoFullName, ensureGitHubPushWebhook, getGithubCreds, setGithubCreds, verifyPat } from "../services/github";
+import { log } from "../log";
 import {
   approveTelegramPairing,
   getNotificationConfig,
@@ -72,7 +73,10 @@ async function saveGithubConnection(body: any) {
     const verified = await verifyPat(token);
     if (!verified.ok) throw badRequest(`github verify failed: ${verified.error}`);
     setGithubCreds({ mode: "pat", username: verified.login, token });
-    return { ok: true, mode, login: verified.login };
+    const fullName = await currentGitHubRepoFullName();
+    const webhook = fullName ? await ensureGitHubPushWebhook(token, fullName) : null;
+    if (webhook && !webhook.ok) log.warn(`github webhook setup failed for ${fullName}: ${webhook.error}`);
+    return { ok: true, mode, login: verified.login, webhook };
   }
 
   if (mode !== "deploy_key") throw badRequest("unsupported github mode");
