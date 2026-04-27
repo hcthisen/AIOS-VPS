@@ -9,6 +9,7 @@ import { config } from "../config";
 import {
   buildDepartmentContextMd,
   ensureAutomationWorkspace,
+  gitRun,
   readAiosYaml,
   rootDisplayNameFromYaml,
 } from "./repo";
@@ -134,7 +135,7 @@ export async function listDepartments(): Promise<Department[]> {
   const out: Department[] = [];
   for (const name of y.departments) {
     const path = join(config.repoDir, name);
-    if (!existsSync(path)) continue;
+    if (!(await departmentHasRepoContent(name, path))) continue;
     const s = await stat(path).catch(() => null);
     if (!s?.isDirectory()) continue;
     out.push({
@@ -144,6 +145,26 @@ export async function listDepartments(): Promise<Department[]> {
     });
   }
   return out;
+}
+
+export async function pruneMissingDepartmentsFromAiosYaml(): Promise<string[]> {
+  const y = await readAiosYaml();
+  const departments = Array.isArray(y?.departments) ? y.departments : [];
+  if (!departments.length) return [];
+
+  const keep: string[] = [];
+  const removed: string[] = [];
+  for (const name of departments) {
+    const path = join(config.repoDir, name);
+    if (await departmentHasRepoContent(name, path)) keep.push(name);
+    else removed.push(name);
+  }
+  if (!removed.length) return [];
+
+  const path = join(config.repoDir, "aios.yaml");
+  const raw = await readFile(path, "utf-8");
+  await writeFile(path, rewriteDepartmentsSection(raw, keep), "utf-8");
+  return removed;
 }
 
 export async function listCronTasks(): Promise<CronTask[]> {
@@ -216,6 +237,22 @@ async function writeDepartmentToAiosYaml(name: string): Promise<void> {
   const departments = Array.isArray(y?.departments) ? y.departments : [];
   const nextDepartments = departments.includes(name) ? departments : [...departments, name];
   await writeFile(path, rewriteDepartmentsSection(raw, nextDepartments), "utf-8");
+}
+
+async function departmentHasRepoContent(name: string, path: string): Promise<boolean> {
+  if (!existsSync(path)) return false;
+  const s = await stat(path).catch(() => null);
+  if (!s?.isDirectory()) return false;
+
+  if (!existsSync(join(config.repoDir, ".git"))) return true;
+  try {
+    const status = await gitRun(["status", "--porcelain", "--", name]);
+    if (status.stdout.trim()) return true;
+    const tracked = await gitRun(["ls-files", "--", name]);
+    return !!tracked.stdout.trim();
+  } catch {
+    return true;
+  }
 }
 
 function rewriteDepartmentsSection(raw: string, departments: string[]): string {

@@ -1,0 +1,108 @@
+import { afterEach, beforeEach, describe, it } from "node:test";
+import { strict as assert } from "node:assert";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "fs/promises";
+import { join } from "path";
+import { tmpdir } from "os";
+
+import { config } from "../config";
+import { syncRepoWithRemote } from "./repo";
+
+const execFileAsync = promisify(execFile);
+
+async function git(args: string[], cwd: string) {
+  return execFileAsync("git", args, { cwd });
+}
+
+async function commitAll(cwd: string, message: string) {
+  await git(["add", "-A"], cwd);
+  await git(["commit", "-m", message], cwd);
+}
+
+async function readNormalized(path: string): Promise<string> {
+  return (await readFile(path, "utf-8")).replace(/\r\n/g, "\n");
+}
+
+describe("syncRepoWithRemote", () => {
+  let tempRoot = "";
+  let remoteRepo = "";
+  let upstreamWork = "";
+  let localRepo = "";
+  const prevRepoDir = config.repoDir;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "aios-repo-sync-"));
+    remoteRepo = join(tempRoot, "remote.git");
+    upstreamWork = join(tempRoot, "upstream");
+    localRepo = join(tempRoot, "local");
+
+    await git(["init", "--bare", remoteRepo], tempRoot);
+    await mkdir(upstreamWork, { recursive: true });
+    await git(["init"], upstreamWork);
+    await git(["config", "user.email", "aios@example.test"], upstreamWork);
+    await git(["config", "user.name", "AIOS"], upstreamWork);
+    await git(["checkout", "-B", "main"], upstreamWork);
+    await writeFile(join(upstreamWork, "aios.yaml"), "version: 1\ndepartments:\n", "utf-8");
+    await writeFile(join(upstreamWork, "cron.md"), "initial\n", "utf-8");
+    await commitAll(upstreamWork, "init");
+    await git(["remote", "add", "origin", remoteRepo], upstreamWork);
+    await git(["push", "-u", "origin", "main"], upstreamWork);
+    await git(["symbolic-ref", "HEAD", "refs/heads/main"], remoteRepo);
+
+    await git(["clone", remoteRepo, localRepo], tempRoot);
+    await git(["checkout", "main"], localRepo);
+    await git(["config", "user.email", "aios@example.test"], localRepo);
+    await git(["config", "user.name", "AIOS"], localRepo);
+    config.repoDir = localRepo;
+  });
+
+  afterEach(async () => {
+    config.repoDir = prevRepoDir;
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it("pulls remote changes before local work continues", async () => {
+    await writeFile(join(upstreamWork, "cron.md"), "remote cron update\n", "utf-8");
+    await commitAll(upstreamWork, "remote cron update");
+    await git(["push"], upstreamWork);
+
+    const result = await syncRepoWithRemote({ notifyOnRemoteWins: false });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.remoteWins, false);
+    assert.equal(await readNormalized(join(localRepo, "cron.md")), "remote cron update\n");
+  });
+
+  it("rebases local AIOS commits onto remote and pushes them", async () => {
+    await writeFile(join(localRepo, "local.md"), "local\n", "utf-8");
+    await commitAll(localRepo, "aios: local change");
+
+    await writeFile(join(upstreamWork, "remote.md"), "remote\n", "utf-8");
+    await commitAll(upstreamWork, "operator remote change");
+    await git(["push"], upstreamWork);
+
+    const result = await syncRepoWithRemote({ notifyOnRemoteWins: false });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.remoteWins, false);
+    assert.equal(result.pushed, true);
+
+    await git(["pull", "--ff-only"], upstreamWork);
+    assert.equal(await readNormalized(join(upstreamWork, "local.md")), "local\n");
+  });
+
+  it("resets to remote when dirty local changes cannot be reapplied", async () => {
+    await writeFile(join(localRepo, "cron.md"), "dirty local cron\n", "utf-8");
+
+    await writeFile(join(upstreamWork, "cron.md"), "remote cron wins\n", "utf-8");
+    await commitAll(upstreamWork, "remote cron wins");
+    await git(["push"], upstreamWork);
+
+    const result = await syncRepoWithRemote({ notifyOnRemoteWins: false });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.remoteWins, true);
+    assert.equal(await readNormalized(join(localRepo, "cron.md")), "remote cron wins\n");
+  });
+});

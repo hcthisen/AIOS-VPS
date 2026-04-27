@@ -12,6 +12,8 @@ import { config } from "../config";
 import { outboxInstructionsBody } from "./outboxInstructionsBody";
 import { buildCommonAuthEnv } from "./provider-auth";
 import { cloneUrlWithPat, getGithubCreds, GithubCreds } from "./github";
+import { sendNotification } from "./notifications";
+import { log } from "../log";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +34,18 @@ export interface AiosContextInput {
   scopeSummary: string;
   outsideRepoContext: string;
   sharedConventions: string;
+}
+
+export interface RepoSyncResult {
+  ok: boolean;
+  changed: boolean;
+  before: string | null;
+  after: string | null;
+  upstream: string | null;
+  stashed: boolean;
+  pushed: boolean;
+  remoteWins: boolean;
+  error?: string;
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -87,7 +101,7 @@ export async function commitRepoPaths(paths: string[], message: string): Promise
 
     await gitRun(["commit", "-m", message], config.repoDir, tempEnv);
     await gitRun(["add", "--", ...pathspecs]).catch(() => {});
-    await gitRun(["push", "origin", "HEAD"]).catch(() => {});
+    await syncRepoWithRemote({ notifyOnRemoteWins: true });
     const { stdout: head } = await gitRun(["rev-parse", "HEAD"]);
     return head.trim();
   } finally {
@@ -151,17 +165,180 @@ export async function cloneRepo(input: {
 }
 
 export async function pullRepo(): Promise<{ ok: true; changed: boolean; commit: string } | { ok: false; error: string }> {
+  const sync = await syncRepoWithRemote({ notifyOnRemoteWins: true });
+  if (!sync.ok) return { ok: false, error: sync.error || "git sync failed" };
+  return { ok: true, changed: sync.changed, commit: sync.after || "" };
+}
+
+export async function syncRepoWithRemote(opts: { notifyOnRemoteWins?: boolean } = {}): Promise<RepoSyncResult> {
+  let before: string | null = null;
+  let upstream: string | null = null;
+  let stashRef: string | null = null;
+  let stashed = false;
+  let pushed = false;
   try {
     if (!existsSync(join(config.repoDir, ".git"))) {
-      return { ok: false, error: "repo not cloned" };
+      return {
+        ok: false,
+        changed: false,
+        before: null,
+        after: null,
+        upstream: null,
+        stashed: false,
+        pushed: false,
+        remoteWins: false,
+        error: "repo not cloned",
+      };
     }
-    const before = (await gitRun(["rev-parse", "HEAD"])).stdout.trim();
-    await gitRun(["pull", "--ff-only"]).catch(() => {});
+    before = (await gitRun(["rev-parse", "HEAD"])).stdout.trim();
+    await gitRun(["fetch", "origin", "--prune"]);
+    upstream = await resolveUpstream();
+
+    const status = (await gitRun(["status", "--porcelain"])).stdout;
+    if (status.trim()) {
+      const message = `aios-pre-sync-${Date.now()}`;
+      const stashOut = await gitRun(["stash", "push", "-u", "-m", message]);
+      if (!/No local changes/i.test(stashOut.stdout)) {
+        const top = (await gitRun(["stash", "list", "--format=%H%x00%gs", "-n", "1"])).stdout.trim();
+        if (top.includes(message)) {
+          stashRef = "stash@{0}";
+          stashed = true;
+        }
+      }
+    }
+
+    await gitRun(["rebase", upstream]);
+    if (stashed) {
+      await gitRun(["stash", "pop", stashRef || "stash@{0}"]);
+      stashRef = null;
+    }
+
+    const ahead = await isAheadOf(upstream);
+    if (ahead) {
+      pushed = await pushWithRetry(upstream);
+    }
+
     const after = (await gitRun(["rev-parse", "HEAD"])).stdout.trim();
-    return { ok: true, changed: before !== after, commit: after };
+    return {
+      ok: true,
+      changed: before !== after || pushed,
+      before,
+      after,
+      upstream,
+      stashed,
+      pushed,
+      remoteWins: false,
+    };
   } catch (e: any) {
-    return { ok: false, error: String(e?.message || e).slice(0, 300) };
+    const error = gitError(e);
+    if (upstream) {
+      const reset = await resetToRemote(upstream, stashRef, error, opts.notifyOnRemoteWins !== false);
+      return {
+        ...reset,
+        before,
+        upstream,
+        stashed,
+        pushed,
+      };
+    }
+    return {
+      ok: false,
+      changed: false,
+      before,
+      after: before,
+      upstream,
+      stashed,
+      pushed,
+      remoteWins: false,
+      error,
+    };
   }
+}
+
+async function resolveUpstream(): Promise<string> {
+  const configured = await gitRun(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    .then((r) => r.stdout.trim())
+    .catch(() => "");
+  if (configured) return configured;
+
+  const branch = await gitRun(["branch", "--show-current"])
+    .then((r) => r.stdout.trim())
+    .catch(() => "");
+  if (branch && await refExists(`origin/${branch}`)) return `origin/${branch}`;
+
+  const originHead = await gitRun(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+    .then((r) => r.stdout.trim())
+    .catch(() => "");
+  if (originHead) return originHead;
+
+  throw new Error("cannot determine Git upstream");
+}
+
+async function refExists(ref: string): Promise<boolean> {
+  return gitRun(["rev-parse", "--verify", ref])
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function isAheadOf(upstream: string): Promise<boolean> {
+  const { stdout } = await gitRun(["rev-list", "--left-right", "--count", `${upstream}...HEAD`]);
+  const [, ahead] = stdout.trim().split(/\s+/).map((n) => Number(n) || 0);
+  return ahead > 0;
+}
+
+async function pushWithRetry(upstream: string): Promise<boolean> {
+  try {
+    await gitRun(["push", "origin", "HEAD"]);
+    return true;
+  } catch {
+    await gitRun(["fetch", "origin", "--prune"]);
+    await gitRun(["rebase", upstream]);
+    await gitRun(["push", "origin", "HEAD"]);
+    return true;
+  }
+}
+
+async function resetToRemote(
+  upstream: string,
+  stashRef: string | null,
+  error: string,
+  notify: boolean,
+): Promise<RepoSyncResult> {
+  await gitRun(["rebase", "--abort"]).catch(() => {});
+  await gitRun(["merge", "--abort"]).catch(() => {});
+  await gitRun(["reset", "--hard", upstream]);
+  await gitRun(["clean", "-fd"]);
+  if (stashRef) await gitRun(["stash", "drop", stashRef]).catch(() => {});
+  const after = (await gitRun(["rev-parse", "HEAD"])).stdout.trim();
+  const message = [
+    "AIOS Git sync could not reconcile local VPS changes with GitHub.",
+    "",
+    `Remote won: reset checkout to ${upstream} at ${after}.`,
+    `Failure: ${error}`,
+  ].join("\n");
+  log.warn("repo sync: remote won", error);
+  if (notify) {
+    await sendNotification(message, "AIOS Git sync reset to GitHub").catch(() => {});
+  }
+  return {
+    ok: true,
+    changed: true,
+    before: null,
+    after,
+    upstream,
+    stashed: !!stashRef,
+    pushed: false,
+    remoteWins: true,
+    error,
+  };
+}
+
+function gitError(e: any): string {
+  const text = [e?.message, e?.stderr, e?.stdout]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text.slice(0, 1000) || String(e || "git failed");
 }
 
 export async function readAiosYaml(): Promise<AiosYaml | null> {

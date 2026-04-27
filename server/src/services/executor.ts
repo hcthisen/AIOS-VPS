@@ -17,7 +17,7 @@ import {
 import { readEnvFile, toMap } from "./envFile";
 import { Run, createRun, updateRun, runEvents, popBacklog, enqueueBacklog, getRun } from "./runs";
 import { claimDepartments, releaseClaimsForRun, expireStaleClaims } from "./claims";
-import { gitRun } from "./repo";
+import { gitRun, syncRepoWithRemote } from "./repo";
 import { runSyncLayer } from "./sync";
 import { isSystemUpdateBlocking } from "./systemUpdate";
 import { displayProvider, isProviderAuthorized } from "./providerAvailability";
@@ -216,6 +216,12 @@ export async function startRun(req: RunRequest): Promise<StartRunResult> {
 }
 
 async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
+  const git = await syncRepoWithRemote({ notifyOnRemoteWins: true });
+  if (!git.ok) {
+    await finalize(runId, depts, { exitCode: 1, error: `git sync failed: ${git.error || "unknown error"}` });
+    return;
+  }
+
   const provider = await pickProvider(req.provider);
   const logDir = join(config.logsDir, "runs", runId.slice(0, 2));
   const logPath = join(logDir, `${runId}.log`);
@@ -358,7 +364,8 @@ async function tryCommitAndPush(runId: string, dept: string, trigger: string): P
     const { stdout: status } = await gitRun(["status", "--porcelain"]);
     if (!status.trim()) return null;
     await gitRun(["commit", "-m", `aios: run ${runId} (${trigger})`]);
-    await gitRun(["push", "origin", "HEAD"]).catch(() => {});
+    const sync = await syncRepoWithRemote({ notifyOnRemoteWins: true });
+    if (!sync.ok) throw new Error(sync.error || "git sync failed after commit");
     const { stdout } = await gitRun(["rev-parse", "HEAD"]);
     return stdout.trim();
   } catch (e: any) {

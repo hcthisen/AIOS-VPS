@@ -32,6 +32,7 @@ import {
   listOwnerNotifications,
   markOwnerNotificationRead,
 } from "../services/ownerNotifications";
+import { syncRepoWithRemote } from "../services/repo";
 
 export function registerDashboardRoutes(router: Router) {
   const guard = adminOnly();
@@ -390,8 +391,13 @@ export function registerDashboardRoutes(router: Router) {
   });
   router.post("/api/controls/sync", async (req, res) => {
     await guard(req, res);
-    const r = await runSyncLayer({ commit: true });
-    res.json(r);
+    const git = await syncRepoWithRemote({ notifyOnRemoteWins: true });
+    if (!git.ok) {
+      res.json({ git, sync: null });
+      return;
+    }
+    const sync = await runSyncLayer({ commit: true });
+    res.json({ git, sync });
   });
   router.post("/api/controls/heartbeat", async (req, res) => {
     await guard(req, res);

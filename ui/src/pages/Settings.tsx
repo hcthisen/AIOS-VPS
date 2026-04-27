@@ -40,7 +40,7 @@ export function SettingsPage() {
         description={`heartbeat ${controls?.heartbeat?.running ? "on" : "off"} · active processes ${controls?.activeProcesses ?? 0} · paused: ${String(!!controls?.paused)}`}
       >
         <div className="row">
-          <button onClick={runSync}>Run sync</button>
+          <button onClick={runSync}>Pull GitHub + sync</button>
           <button onClick={runHeartbeat}>Trigger heartbeat tick</button>
           <button className="danger" onClick={killAll}>Kill all + pause</button>
         </div>

@@ -3,7 +3,7 @@
 import cronParser from "cron-parser";
 import { db } from "../db";
 import { log } from "../log";
-import { gitRun, pullRepo } from "./repo";
+import { gitRun, RepoSyncResult, syncRepoWithRemote } from "./repo";
 import { listCronTasks, listGoals } from "./departments";
 import { startRun, isGlobalPaused } from "./executor";
 import { runSyncLayer } from "./sync";
@@ -17,6 +17,7 @@ let heartbeatTimer: NodeJS.Timeout | null = null;
 let running = false;
 let lastTickAt = 0;
 let lastTickError: string | null = null;
+let lastGitSync: RepoSyncResult | null = null;
 
 export function startHeartbeat(intervalMs = DEFAULT_INTERVAL_MS) {
   if (heartbeatTimer) return;
@@ -46,7 +47,7 @@ export function stopHeartbeat() {
 }
 
 export function heartbeatStatus() {
-  return { running: !!heartbeatTimer, lastTickAt, lastTickError };
+  return { running: !!heartbeatTimer, lastTickAt, lastTickError, lastGitSync };
 }
 
 export async function runHeartbeatTick() {
@@ -54,9 +55,10 @@ export async function runHeartbeatTick() {
   if (isGlobalPaused()) return;
   if (await isSystemUpdateBlocking()) return;
 
-  const pull = await pullRepo();
-  if (!pull.ok) {
-    log.warn("heartbeat: pull failed:", pull.error);
+  const git = await syncRepoWithRemote({ notifyOnRemoteWins: true });
+  lastGitSync = git;
+  if (!git.ok) {
+    log.warn("heartbeat: git sync failed:", git.error);
     return;
   }
   await runSyncLayer().catch((e) => log.warn("sync after pull failed", e?.message || e));
@@ -134,7 +136,7 @@ async function commitOutboxCleanup() {
   const { stdout } = await gitRun(["status", "--porcelain"]);
   if (!stdout.trim()) return;
   await gitRun(["commit", "-m", "aios: process owner notifications"]);
-  await gitRun(["push", "origin", "HEAD"]).catch(() => {});
+  lastGitSync = await syncRepoWithRemote({ notifyOnRemoteWins: true });
 }
 
 export function isGoalScheduleAllowed(schedule: string, minIntervalMs = MIN_GOAL_INTERVAL_MS): boolean {

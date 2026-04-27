@@ -13,8 +13,9 @@ import { existsSync } from "fs";
 import { join } from "path";
 
 import { config } from "../config";
-import { ensureRootDepartmentName, getRootDepartment, listDepartments } from "./departments";
-import { buildDefaultReadmeMd, ensureAutomationWorkspace, gitRun, rootDisplayNameFromYaml, readAiosYaml } from "./repo";
+import { db } from "../db";
+import { ensureRootDepartmentName, getRootDepartment, listDepartments, pruneMissingDepartmentsFromAiosYaml } from "./departments";
+import { buildDefaultReadmeMd, ensureAutomationWorkspace, gitRun, rootDisplayNameFromYaml, readAiosYaml, syncRepoWithRemote } from "./repo";
 import { log } from "../log";
 import { sendNotification } from "./notifications";
 import { applyOutboxInstructions } from "./outboxInstructions";
@@ -73,10 +74,17 @@ async function copyTree(src: string, dst: string): Promise<void> {
 export interface SyncResult {
   changed: string[];
   conflicts: Array<{ path: string; message: string }>;
+  removedDepartments: string[];
 }
 
 export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }): Promise<SyncResult> {
-  const out: SyncResult = { changed: [], conflicts: [] };
+  const out: SyncResult = { changed: [], conflicts: [], removedDepartments: [] };
+  const removedDepartments = await pruneMissingDepartmentsFromAiosYaml();
+  if (removedDepartments.length) {
+    out.removedDepartments.push(...removedDepartments);
+    out.changed.push(join(config.repoDir, "aios.yaml"));
+    clearRemovedDepartmentState(removedDepartments);
+  }
   const root = await getRootDepartment();
   const depts = await listDepartments();
   const scopes = [root, ...depts];
@@ -149,7 +157,7 @@ export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }
       const { stdout: status } = await gitRun(["status", "--porcelain"]);
       if (status.trim()) {
         await gitRun(["commit", "-m", "aios: sync"]);
-        await gitRun(["push", "origin", "HEAD"]).catch(() => {});
+        await syncRepoWithRemote({ notifyOnRemoteWins: true });
       }
     } catch (e: any) {
       log.warn("sync: commit/push failed", e?.message || e);
@@ -163,6 +171,16 @@ export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }
   }
 
   return out;
+}
+
+function clearRemovedDepartmentState(departments: string[]) {
+  for (const department of departments) {
+    const abs = join(config.repoDir, department);
+    db.prepare("DELETE FROM backlog WHERE department = ?").run(department);
+    db.prepare("DELETE FROM claims WHERE department = ?").run(department);
+    db.prepare("DELETE FROM cron_state WHERE path = ? OR path LIKE ?").run(abs, `${abs}%`);
+    db.prepare("DELETE FROM goal_state WHERE path = ? OR path LIKE ?").run(abs, `${abs}%`);
+  }
 }
 
 async function mirrorClaudeAgents(dir: string, out: SyncResult) {
