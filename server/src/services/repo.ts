@@ -1,7 +1,7 @@
 // Repo management: clone/pull, scaffold new repo, validate aios.yaml.
 
 import { randomBytes } from "crypto";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { mkdir, writeFile, readFile, stat, rm } from "fs/promises";
 import { existsSync } from "fs";
@@ -10,7 +10,7 @@ import matter from "gray-matter";
 
 import { config } from "../config";
 import { outboxInstructionsBody } from "./outboxInstructionsBody";
-import { buildCommonAuthEnv } from "./provider-auth";
+import { anthropicAuthDetected, buildAnthropicAuthEnv, buildCommonAuthEnv, buildOpenAiAuthEnv, codexAuthDetected } from "./provider-auth";
 import { cloneUrlWithPat, getGithubCreds, GithubCreds } from "./github";
 import { sendNotification } from "./notifications";
 import { log } from "../log";
@@ -45,8 +45,39 @@ export interface RepoSyncResult {
   stashed: boolean;
   pushed: boolean;
   remoteWins: boolean;
+  blocked?: boolean;
+  llmResolved?: boolean;
   error?: string;
 }
+
+export interface GitSyncStatus {
+  lastRemoteCheckAt: number | null;
+  lastRemoteCommit: string | null;
+  lastLocalCommit: string | null;
+  pendingInboundSync: boolean;
+  inProgress: boolean;
+  blockedByActiveRuns: boolean;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+  lastConflictResolution: string | null;
+}
+
+const DEFAULT_REMOTE_POLL_INTERVAL_MS = Number(process.env.AIOS_GIT_POLL_INTERVAL_MS || 5 * 60_000);
+const LLM_CONFLICT_TIMEOUT_MS = Number(process.env.AIOS_GIT_CONFLICT_TIMEOUT_MS || 5 * 60_000);
+const LLM_CONFLICT_MAX_FILE_BYTES = Number(process.env.AIOS_GIT_CONFLICT_MAX_FILE_BYTES || 200_000);
+let worktreeBlocked = () => false;
+let gitQueue: Promise<unknown> = Promise.resolve();
+const gitSyncStatus: GitSyncStatus = {
+  lastRemoteCheckAt: null,
+  lastRemoteCommit: null,
+  lastLocalCommit: null,
+  pendingInboundSync: false,
+  inProgress: false,
+  blockedByActiveRuns: false,
+  lastSuccessAt: null,
+  lastError: null,
+  lastConflictResolution: null,
+};
 
 async function pathExists(p: string): Promise<boolean> {
   try { await stat(p); return true; } catch { return false; }
@@ -73,6 +104,7 @@ function repoPathspecs(paths: string[]): string[] {
 }
 
 export async function commitRepoPaths(paths: string[], message: string): Promise<string | null> {
+  if (worktreeBlocked()) throw new Error("repo is busy with active agent work");
   const pathspecs = repoPathspecs(paths);
   if (!pathspecs.length) return null;
 
@@ -107,6 +139,105 @@ export async function commitRepoPaths(paths: string[], message: string): Promise
   } finally {
     await rm(tmpIndex, { force: true }).catch(() => {});
   }
+}
+
+export async function commitRepoSnapshot(message: string): Promise<string | null> {
+  if (worktreeBlocked()) throw new Error("repo is busy with active agent work");
+  await gitRun(["add", "-A"]);
+  const { stdout: status } = await gitRun(["status", "--porcelain"]);
+  if (!status.trim()) return null;
+  await gitRun(["commit", "-m", message]);
+  const sync = await syncRepoWithRemote({ notifyOnRemoteWins: true });
+  if (!sync.ok) throw new Error(sync.error || "git sync failed after commit");
+  const { stdout } = await gitRun(["rev-parse", "HEAD"]);
+  return stdout.trim();
+}
+
+export function setGitWorktreeBlocked(fn: () => boolean) {
+  worktreeBlocked = fn;
+}
+
+export function isGitWorktreeBlocked(): boolean {
+  return worktreeBlocked();
+}
+
+export function getGitSyncStatus(): GitSyncStatus {
+  return { ...gitSyncStatus, blockedByActiveRuns: worktreeBlocked() };
+}
+
+export function markInboundSyncPending(reason = "inbound change") {
+  gitSyncStatus.pendingInboundSync = true;
+  gitSyncStatus.lastConflictResolution = reason;
+}
+
+export async function checkRemoteForUpdates(opts: { force?: boolean } = {}): Promise<{
+  checked: boolean;
+  changed: boolean;
+  blocked: boolean;
+  remoteCommit: string | null;
+  localCommit: string | null;
+}> {
+  const now = Date.now();
+  if (!opts.force && gitSyncStatus.lastRemoteCheckAt && now - gitSyncStatus.lastRemoteCheckAt < DEFAULT_REMOTE_POLL_INTERVAL_MS) {
+    return {
+      checked: false,
+      changed: gitSyncStatus.pendingInboundSync,
+      blocked: worktreeBlocked(),
+      remoteCommit: gitSyncStatus.lastRemoteCommit,
+      localCommit: gitSyncStatus.lastLocalCommit,
+    };
+  }
+
+  return withGitQueue(async () => {
+    if (!existsSync(join(config.repoDir, ".git"))) {
+      gitSyncStatus.lastError = "repo not cloned";
+      return { checked: true, changed: false, blocked: worktreeBlocked(), remoteCommit: null, localCommit: null };
+    }
+    gitSyncStatus.lastRemoteCheckAt = Date.now();
+    await gitRun(["fetch", "origin", "--prune"]);
+    const upstream = await resolveUpstream();
+    const [remoteCommit, localCommit] = await Promise.all([
+      revParse(upstream),
+      revParse("HEAD"),
+    ]);
+    gitSyncStatus.lastRemoteCommit = remoteCommit;
+    gitSyncStatus.lastLocalCommit = localCommit;
+    const changed = remoteCommit !== localCommit;
+    if (changed) gitSyncStatus.pendingInboundSync = true;
+    return {
+      checked: true,
+      changed,
+      blocked: worktreeBlocked(),
+      remoteCommit,
+      localCommit,
+    };
+  });
+}
+
+export async function reconcilePendingRepoSync(reason = "pending sync"): Promise<RepoSyncResult | null> {
+  if (!gitSyncStatus.pendingInboundSync) return null;
+  if (worktreeBlocked()) {
+    gitSyncStatus.blockedByActiveRuns = true;
+    return {
+      ok: true,
+      changed: false,
+      before: await repoHead(),
+      after: await repoHead(),
+      upstream: null,
+      stashed: false,
+      pushed: false,
+      remoteWins: false,
+      blocked: true,
+    };
+  }
+  gitSyncStatus.lastConflictResolution = reason;
+  return syncRepoWithRemote({ notifyOnRemoteWins: true });
+}
+
+async function withGitQueue<T>(fn: () => Promise<T>): Promise<T> {
+  const run = gitQueue.then(fn, fn);
+  gitQueue = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 function buildGitEnv(): NodeJS.ProcessEnv {
@@ -170,7 +301,47 @@ export async function pullRepo(): Promise<{ ok: true; changed: boolean; commit: 
   return { ok: true, changed: sync.changed, commit: sync.after || "" };
 }
 
-export async function syncRepoWithRemote(opts: { notifyOnRemoteWins?: boolean } = {}): Promise<RepoSyncResult> {
+export async function syncRepoWithRemote(opts: { notifyOnRemoteWins?: boolean; allowWhenBlocked?: boolean } = {}): Promise<RepoSyncResult> {
+  return withGitQueue(async () => {
+    if (!opts.allowWhenBlocked && worktreeBlocked()) {
+      gitSyncStatus.pendingInboundSync = true;
+      gitSyncStatus.blockedByActiveRuns = true;
+      return {
+        ok: true,
+        changed: false,
+        before: await repoHead(),
+        after: await repoHead(),
+        upstream: null,
+        stashed: false,
+        pushed: false,
+        remoteWins: false,
+        blocked: true,
+      };
+    }
+
+    gitSyncStatus.inProgress = true;
+    gitSyncStatus.blockedByActiveRuns = false;
+    try {
+      const result = await syncRepoWithRemoteUnlocked(opts);
+      gitSyncStatus.lastLocalCommit = result.after;
+      if (result.upstream) gitSyncStatus.lastRemoteCommit = await revParse(result.upstream).catch(() => gitSyncStatus.lastRemoteCommit);
+      if (result.ok) {
+        gitSyncStatus.pendingInboundSync = false;
+        gitSyncStatus.lastSuccessAt = Date.now();
+        gitSyncStatus.lastError = null;
+      } else {
+        gitSyncStatus.lastError = result.error || "git sync failed";
+      }
+      if (result.remoteWins) gitSyncStatus.lastConflictResolution = "remote-wins";
+      if (result.llmResolved) gitSyncStatus.lastConflictResolution = "llm-resolved";
+      return result;
+    } finally {
+      gitSyncStatus.inProgress = false;
+    }
+  });
+}
+
+async function syncRepoWithRemoteUnlocked(opts: { notifyOnRemoteWins?: boolean; allowWhenBlocked?: boolean } = {}): Promise<RepoSyncResult> {
   let before: string | null = null;
   let upstream: string | null = null;
   let stashRef: string | null = null;
@@ -232,6 +403,23 @@ export async function syncRepoWithRemote(opts: { notifyOnRemoteWins?: boolean } 
   } catch (e: any) {
     const error = gitError(e);
     if (upstream) {
+      const llm = await tryResolveConflictsWithLlm(upstream, error);
+      if (llm.resolved) {
+        const ahead = await isAheadOf(upstream);
+        if (ahead) pushed = await pushWithRetry(upstream);
+        const after = (await gitRun(["rev-parse", "HEAD"])).stdout.trim();
+        return {
+          ok: true,
+          changed: true,
+          before,
+          after,
+          upstream,
+          stashed,
+          pushed,
+          remoteWins: false,
+          llmResolved: true,
+        };
+      }
       const reset = await resetToRemote(upstream, stashRef, error, opts.notifyOnRemoteWins !== false);
       return {
         ...reset,
@@ -280,6 +468,11 @@ async function refExists(ref: string): Promise<boolean> {
     .catch(() => false);
 }
 
+async function revParse(ref: string): Promise<string> {
+  const { stdout } = await gitRun(["rev-parse", ref]);
+  return stdout.trim();
+}
+
 async function isAheadOf(upstream: string): Promise<boolean> {
   const { stdout } = await gitRun(["rev-list", "--left-right", "--count", `${upstream}...HEAD`]);
   const [, ahead] = stdout.trim().split(/\s+/).map((n) => Number(n) || 0);
@@ -296,6 +489,144 @@ async function pushWithRetry(upstream: string): Promise<boolean> {
     await gitRun(["push", "origin", "HEAD"]);
     return true;
   }
+}
+
+async function tryResolveConflictsWithLlm(upstream: string, error: string): Promise<{ resolved: boolean; error?: string }> {
+  const files = await conflictedTextFiles();
+  if (!files.ok) return { resolved: false, error: files.error };
+  if (!files.paths.length) return { resolved: false, error: "no resolvable conflicts" };
+
+  const provider = await chooseConflictProvider();
+  if (!provider) return { resolved: false, error: "no authorized CLI provider for conflict resolution" };
+
+  const prompt = [
+    "You are resolving Git merge conflicts in an AIOS repository.",
+    "Only edit the conflicted files listed below. Do not make unrelated changes.",
+    "Preserve operator-authored intent from both sides where possible.",
+    "Remove all conflict markers, leave valid text/markdown/json/yaml/typescript as appropriate, and stage the resolved files with git add.",
+    "",
+    `Upstream: ${upstream}`,
+    `Git failure: ${error}`,
+    "",
+    "Conflicted files:",
+    ...files.paths.map((p) => `- ${p}`),
+    "",
+    "After resolving, run lightweight checks if useful, but do not commit or push.",
+  ].join("\n");
+
+  const run = await runConflictCli(provider, prompt);
+  if (!run.ok) {
+    await writeConflictBundle(error, files.paths, run.error || "LLM resolver failed").catch(() => {});
+    return { resolved: false, error: run.error || "LLM resolver failed" };
+  }
+
+  try {
+    await gitRun(["add", "--", ...files.paths]);
+    await verifyConflictResolution(files.paths);
+    if (await rebaseInProgress()) {
+      await gitRun(["-c", "core.editor=true", "rebase", "--continue"]);
+    } else {
+      const { stdout } = await gitRun(["status", "--porcelain"]);
+      if (stdout.trim()) {
+        await gitRun(["commit", "-m", "aios: resolve GitHub sync conflict"]);
+      }
+    }
+    return { resolved: true };
+  } catch (e: any) {
+    const detail = gitError(e);
+    await writeConflictBundle(error, files.paths, detail).catch(() => {});
+    return { resolved: false, error: detail };
+  }
+}
+
+async function conflictedTextFiles(): Promise<{ ok: true; paths: string[] } | { ok: false; paths: string[]; error: string }> {
+  const { stdout } = await gitRun(["diff", "--name-only", "--diff-filter=U"]);
+  const paths = stdout.split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
+  const accepted: string[] = [];
+  for (const rel of paths) {
+    const abs = resolve(config.repoDir, rel);
+    if (!abs.startsWith(resolve(config.repoDir))) return { ok: false, paths: accepted, error: `path escapes repo: ${rel}` };
+    if (/(^|\/)\.env($|\.)|secret|private[_-]?key/i.test(rel.replace(/\\/g, "/"))) {
+      return { ok: false, paths: accepted, error: `refusing secret-like conflict path: ${rel}` };
+    }
+    const s = await stat(abs).catch(() => null);
+    if (!s?.isFile()) return { ok: false, paths: accepted, error: `not a regular file: ${rel}` };
+    if (s.size > LLM_CONFLICT_MAX_FILE_BYTES) return { ok: false, paths: accepted, error: `conflict file too large: ${rel}` };
+    const sample = await readFile(abs);
+    if (sample.includes(0)) return { ok: false, paths: accepted, error: `binary conflict file: ${rel}` };
+    accepted.push(rel);
+  }
+  return { ok: true, paths: accepted };
+}
+
+async function chooseConflictProvider(): Promise<"codex" | "claude-code" | null> {
+  const configured = String(process.env.AIOS_GIT_CONFLICT_PROVIDER || "").trim();
+  if (configured === "codex" && await codexAuthDetected()) return "codex";
+  if (configured === "claude-code" && await anthropicAuthDetected()) return "claude-code";
+  if (await codexAuthDetected()) return "codex";
+  if (await anthropicAuthDetected()) return "claude-code";
+  return null;
+}
+
+async function runConflictCli(provider: "codex" | "claude-code", prompt: string): Promise<{ ok: boolean; error?: string }> {
+  const env = provider === "codex" ? buildOpenAiAuthEnv() : buildAnthropicAuthEnv();
+  const bin = provider === "codex" ? "codex" : "claude";
+  const args = provider === "codex"
+    ? ["exec", "--skip-git-repo-check", "--sandbox", "danger-full-access", "-"]
+    : ["--print", "--permission-mode", "acceptEdits"];
+
+  return new Promise((resolveRun) => {
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(bin, args, { cwd: config.repoDir, env, stdio: ["pipe", "pipe", "pipe"] });
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      resolveRun({ ok: false, error: "LLM conflict resolver timed out" });
+    }, LLM_CONFLICT_TIMEOUT_MS);
+    child.stdout?.on("data", (chunk) => { stdout += chunk.toString("utf-8"); });
+    child.stderr?.on("data", (chunk) => { stderr += chunk.toString("utf-8"); });
+    child.on("error", (e) => {
+      clearTimeout(timeout);
+      resolveRun({ ok: false, error: String(e?.message || e) });
+    });
+    child.on("exit", (code, signal) => {
+      clearTimeout(timeout);
+      if (code === 0) resolveRun({ ok: true });
+      else resolveRun({ ok: false, error: `LLM resolver exit ${code}${signal ? ` sig ${signal}` : ""}\n${stderr || stdout}`.slice(0, 1000) });
+    });
+    child.stdin?.write(prompt);
+    child.stdin?.end();
+  });
+}
+
+async function verifyConflictResolution(paths: string[]) {
+  const unresolved = (await gitRun(["diff", "--name-only", "--diff-filter=U"])).stdout.trim();
+  if (unresolved) throw new Error(`unmerged files remain: ${unresolved}`);
+  await gitRun(["diff", "--check"]);
+  for (const rel of paths) {
+    const raw = await readFile(join(config.repoDir, rel), "utf-8").catch(() => "");
+    if (/^(<<<<<<<|=======|>>>>>>>) /m.test(raw)) {
+      throw new Error(`conflict markers remain in ${rel}`);
+    }
+  }
+}
+
+async function rebaseInProgress(): Promise<boolean> {
+  const rebaseMerge = await gitRun(["rev-parse", "--git-path", "rebase-merge"]).then((r) => r.stdout.trim()).catch(() => "");
+  const rebaseApply = await gitRun(["rev-parse", "--git-path", "rebase-apply"]).then((r) => r.stdout.trim()).catch(() => "");
+  return (!!rebaseMerge && existsSync(resolveGitPath(rebaseMerge)))
+    || (!!rebaseApply && existsSync(resolveGitPath(rebaseApply)));
+}
+
+function resolveGitPath(path: string): string {
+  return resolve(path) === path ? path : join(config.repoDir, path);
+}
+
+async function writeConflictBundle(error: string, paths: string[], resolverError: string) {
+  const dir = join(config.logsDir, "git-conflicts");
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${Date.now()}.json`);
+  await writeFile(path, `${JSON.stringify({ error, resolverError, paths, at: new Date().toISOString() }, null, 2)}\n`, "utf-8");
 }
 
 async function resetToRemote(

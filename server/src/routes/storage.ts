@@ -31,7 +31,7 @@ import {
 import { probe } from "../services/storageProbe";
 import { buildPublicObjectUrl, encodePublicPath, probePublicBaseUrl } from "../services/publicBaseUrl";
 import { syncManagedCaddy } from "../services/caddy";
-import { commitRepoPaths } from "../services/repo";
+import { commitRepoPaths, isGitWorktreeBlocked, syncRepoWithRemote } from "../services/repo";
 
 // Serialize concurrent writes per department so a second POST /config can't
 // race ahead of an in-flight probe+write.
@@ -108,6 +108,12 @@ async function commitStorageInstructionChanges(
   return commitRepoPaths(paths, message);
 }
 
+async function ensureRepoWritable() {
+  if (isGitWorktreeBlocked()) throw badRequest("repo is busy with active agent work");
+  const git = await syncRepoWithRemote({ notifyOnRemoteWins: true });
+  if (!git.ok || git.blocked) throw badRequest(git.error || "repo is busy with active agent work");
+}
+
 export function registerStorageRoutes(router: Router) {
   const guard = adminOnly();
 
@@ -160,6 +166,7 @@ export function registerStorageRoutes(router: Router) {
       throw badRequest((e as Error).message);
     }
     await withDeptLock(dept, async () => {
+      await ensureRepoWritable();
       const result = await probe(cfg);
       if (!result.ok) {
         throw badRequest(result.error?.message || "probe failed", {
@@ -201,6 +208,7 @@ export function registerStorageRoutes(router: Router) {
     await guard(req, res);
     const dept = req.params.dept;
     await withDeptLock(dept, async () => {
+      await ensureRepoWritable();
       await clearStorageConfig(dept);
       await clearInstructions(dept);
       await syncManagedCaddy();
@@ -219,6 +227,7 @@ export function registerStorageRoutes(router: Router) {
   router.post("/api/departments/:dept/storage/instructions/reset", async (req, res) => {
     await guard(req, res);
     const dept = req.params.dept;
+    await ensureRepoWritable();
     const changed = await resetInstructionsToDefaults(dept);
     if (changed) {
       await commitStorageInstructionChanges(dept, `aios: reset storage instructions for ${dept}`).catch((e) => {

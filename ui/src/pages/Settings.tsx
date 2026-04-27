@@ -20,6 +20,7 @@ export function SettingsPage() {
   const runSync = async () => { setSyncResult(await api("/api/controls/sync", { method: "POST" })); };
   const runHeartbeat = async () => { await api("/api/controls/heartbeat", { method: "POST" }); refresh(); };
   const killAll = async () => { await api("/api/controls/kill-all", { method: "POST" }); refresh(); };
+  const gitSync = controls?.gitSync;
 
   return (
     <div className="col">
@@ -44,8 +45,24 @@ export function SettingsPage() {
           <button onClick={runHeartbeat}>Trigger heartbeat tick</button>
           <button className="danger" onClick={killAll}>Kill all + pause</button>
         </div>
+        {gitSync && (
+          <div className="grid-2">
+            <div className="small"><span className="muted">Git sync</span><br /><b>{gitSync.inProgress ? "running" : gitSync.pendingInboundSync ? "pending" : "idle"}</b></div>
+            <div className="small"><span className="muted">Blocked</span><br /><b>{String(!!gitSync.blockedByActiveRuns)}</b></div>
+            <div className="small"><span className="muted">Last remote check</span><br /><b>{gitSync.lastRemoteCheckAt ? new Date(gitSync.lastRemoteCheckAt).toLocaleString() : "never"}</b></div>
+            <div className="small"><span className="muted">Last success</span><br /><b>{gitSync.lastSuccessAt ? new Date(gitSync.lastSuccessAt).toLocaleString() : "never"}</b></div>
+            <div className="small"><span className="muted">Remote commit</span><br /><b>{shortSha(gitSync.lastRemoteCommit)}</b></div>
+            <div className="small"><span className="muted">Local commit</span><br /><b>{shortSha(gitSync.lastLocalCommit)}</b></div>
+            <div className="small"><span className="muted">Conflict outcome</span><br /><b>{gitSync.lastConflictResolution || "none"}</b></div>
+            <div className="small"><span className="muted">Last error</span><br /><b>{gitSync.lastError || "none"}</b></div>
+          </div>
+        )}
         {syncResult && <pre className="log small">{JSON.stringify(syncResult, null, 2)}</pre>}
       </Section>
     </div>
   );
+}
+
+function shortSha(value: string | null | undefined) {
+  return value ? value.slice(0, 8) : "unknown";
 }

@@ -17,7 +17,7 @@ import {
 import { readEnvFile, toMap } from "./envFile";
 import { Run, createRun, updateRun, runEvents, popBacklog, enqueueBacklog, getRun } from "./runs";
 import { claimDepartments, releaseClaimsForRun, expireStaleClaims } from "./claims";
-import { gitRun, syncRepoWithRemote } from "./repo";
+import { gitRun, markInboundSyncPending, setGitWorktreeBlocked, syncRepoWithRemote } from "./repo";
 import { runSyncLayer } from "./sync";
 import { isSystemUpdateBlocking } from "./systemUpdate";
 import { displayProvider, isProviderAuthorized } from "./providerAvailability";
@@ -42,6 +42,8 @@ export interface RunRequest {
 
 const activeProcesses = new Map<string, ChildProcess>();
 let globalPaused = false;
+
+setGitWorktreeBlocked(() => activeProcesses.size > 0);
 
 export function setGlobalPause(paused: boolean) {
   globalPaused = paused;
@@ -298,16 +300,21 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
 
   let commitSha: string | null = null;
   if (code === 0 && req.commitOnSuccess !== false) {
-    await processOwnerNotificationOutbox({ runId }).catch((e) => {
-      log.warn("owner notification outbox processing failed", runId, e?.message || e);
-    });
-    await runSyncLayer({ commit: false }).catch((e) => {
-      log.warn("sync after run failed", runId, e?.message || e);
-    });
-    commitSha = await tryCommitAndPush(runId, depts[0], req.trigger).catch((e) => {
-      log.warn("commit/push failed", runId, e?.message || e);
-      return null;
-    });
+    if (activeProcesses.size > 0) {
+      markInboundSyncPending("agent finished while another agent is active");
+      log.info("deferring git commit until active agents finish", runId);
+    } else {
+      await processOwnerNotificationOutbox({ runId }).catch((e) => {
+        log.warn("owner notification outbox processing failed", runId, e?.message || e);
+      });
+      await runSyncLayer({ commit: false }).catch((e) => {
+        log.warn("sync after run failed", runId, e?.message || e);
+      });
+      commitSha = await tryCommitAndPush(runId, depts[0], req.trigger).catch((e) => {
+        log.warn("commit/push failed", runId, e?.message || e);
+        return null;
+      });
+    }
   }
 
   await recordUsage(runId, depts[0], provider, logPath);

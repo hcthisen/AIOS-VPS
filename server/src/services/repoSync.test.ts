@@ -7,7 +7,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 import { config } from "../config";
-import { syncRepoWithRemote } from "./repo";
+import { checkRemoteForUpdates, getGitSyncStatus, reconcilePendingRepoSync, setGitWorktreeBlocked, syncRepoWithRemote } from "./repo";
 
 const execFileAsync = promisify(execFile);
 
@@ -58,6 +58,7 @@ describe("syncRepoWithRemote", () => {
   });
 
   afterEach(async () => {
+    setGitWorktreeBlocked(() => false);
     config.repoDir = prevRepoDir;
     await rm(tempRoot, { recursive: true, force: true });
   });
@@ -104,5 +105,37 @@ describe("syncRepoWithRemote", () => {
     assert.equal(result.ok, true);
     assert.equal(result.remoteWins, true);
     assert.equal(await readNormalized(join(localRepo, "cron.md")), "remote cron wins\n");
+  });
+
+  it("marks pending inbound sync from remote probes and reconciles it", async () => {
+    await writeFile(join(upstreamWork, "cron.md"), "remote pending update\n", "utf-8");
+    await commitAll(upstreamWork, "remote pending update");
+    await git(["push"], upstreamWork);
+
+    const probe = await checkRemoteForUpdates({ force: true });
+    assert.equal(probe.checked, true);
+    assert.equal(probe.changed, true);
+    assert.equal(getGitSyncStatus().pendingInboundSync, true);
+
+    const sync = await reconcilePendingRepoSync("test pending sync");
+    assert.equal(sync?.ok, true);
+    assert.equal(sync?.blocked, undefined);
+    assert.equal(await readNormalized(join(localRepo, "cron.md")), "remote pending update\n");
+    assert.equal(getGitSyncStatus().pendingInboundSync, false);
+  });
+
+  it("defers pending sync while the worktree is blocked", async () => {
+    await writeFile(join(upstreamWork, "cron.md"), "remote blocked update\n", "utf-8");
+    await commitAll(upstreamWork, "remote blocked update");
+    await git(["push"], upstreamWork);
+
+    await checkRemoteForUpdates({ force: true });
+    setGitWorktreeBlocked(() => true);
+
+    const blocked = await reconcilePendingRepoSync("test blocked sync");
+
+    assert.equal(blocked?.blocked, true);
+    assert.equal(getGitSyncStatus().pendingInboundSync, true);
+    assert.equal(await readNormalized(join(localRepo, "cron.md")), "initial\n");
   });
 });

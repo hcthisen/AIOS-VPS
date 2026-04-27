@@ -3,7 +3,7 @@
 import cronParser from "cron-parser";
 import { db } from "../db";
 import { log } from "../log";
-import { gitRun, RepoSyncResult, syncRepoWithRemote } from "./repo";
+import { checkRemoteForUpdates, gitRun, isGitWorktreeBlocked, reconcilePendingRepoSync, RepoSyncResult, syncRepoWithRemote } from "./repo";
 import { listCronTasks, listGoals } from "./departments";
 import { startRun, isGlobalPaused } from "./executor";
 import { runSyncLayer } from "./sync";
@@ -55,19 +55,27 @@ export async function runHeartbeatTick() {
   if (isGlobalPaused()) return;
   if (await isSystemUpdateBlocking()) return;
 
-  const git = await syncRepoWithRemote({ notifyOnRemoteWins: true });
-  lastGitSync = git;
-  if (!git.ok) {
-    log.warn("heartbeat: git sync failed:", git.error);
-    return;
-  }
-  await runSyncLayer().catch((e) => log.warn("sync after pull failed", e?.message || e));
-  const outbox = await processOwnerNotificationOutbox().catch((e) => {
-    log.warn("owner notification outbox processing failed", e?.message || e);
+  const remote = await checkRemoteForUpdates().catch((e) => {
+    log.warn("heartbeat: remote check failed:", e?.message || e);
     return null;
   });
-  if (outbox?.deletedPaths.length) {
-    await commitOutboxCleanup().catch((e) => log.warn("owner notification cleanup commit failed", e?.message || e));
+  if (remote?.changed) {
+    const git = await reconcilePendingRepoSync("heartbeat remote update");
+    if (git) lastGitSync = git;
+    if (git && !git.ok) {
+      log.warn("heartbeat: git sync failed:", git.error);
+      return;
+    }
+  }
+  if (!isGitWorktreeBlocked()) {
+    await runSyncLayer().catch((e) => log.warn("sync after pull failed", e?.message || e));
+    const outbox = await processOwnerNotificationOutbox().catch((e) => {
+      log.warn("owner notification outbox processing failed", e?.message || e);
+      return null;
+    });
+    if (outbox?.deletedPaths.length) {
+      await commitOutboxCleanup().catch((e) => log.warn("owner notification cleanup commit failed", e?.message || e));
+    }
   }
   await retryPendingOwnerNotifications().catch((e) => log.warn("owner notification retry failed", e?.message || e));
 

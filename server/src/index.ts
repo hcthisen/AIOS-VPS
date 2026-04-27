@@ -10,6 +10,7 @@ import { registerOnboardingRoutes } from "./routes/github";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerStorageRoutes } from "./routes/storage";
 import { registerSettingsRoutes } from "./routes/settings";
+import { registerGithubWebhookRoutes } from "./routes/github-webhook";
 import { attachTerminal } from "./terminal";
 import { startHeartbeat } from "./services/heartbeat";
 import { maybeServePublicObject } from "./services/publicBaseUrl";
@@ -28,6 +29,7 @@ async function main() {
   registerDashboardRoutes(router);
   registerStorageRoutes(router);
   registerSettingsRoutes(router);
+  registerGithubWebhookRoutes(router);
 
   const server = createHttpServer(router, {
     uiDir: config.uiDir,

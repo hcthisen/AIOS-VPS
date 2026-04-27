@@ -32,7 +32,7 @@ import {
   listOwnerNotifications,
   markOwnerNotificationRead,
 } from "../services/ownerNotifications";
-import { syncRepoWithRemote } from "../services/repo";
+import { commitRepoSnapshot, getGitSyncStatus, isGitWorktreeBlocked, syncRepoWithRemote } from "../services/repo";
 
 export function registerDashboardRoutes(router: Router) {
   const guard = adminOnly();
@@ -59,11 +59,14 @@ export function registerDashboardRoutes(router: Router) {
 
   router.post("/api/departments", async (req, res) => {
     await guard(req, res);
+    await ensureRepoWritable();
     try {
       const department = await createDepartment({ name: String(req.body?.name || "") });
       const sync = await runSyncLayer({ commit: false });
+      const commit = await commitRepoSnapshot(`aios: create department ${department.name}`);
       res.json({
         ok: true,
+        commit,
         department: {
           name: department.name,
           path: department.path,
@@ -81,11 +84,14 @@ export function registerDashboardRoutes(router: Router) {
 
   router.put("/api/root", async (req, res) => {
     await guard(req, res);
+    await ensureRepoWritable();
     try {
       const root = await updateRootDepartmentName(String(req.body?.displayName || req.body?.name || ""));
       const sync = await runSyncLayer({ commit: false });
+      const commit = await commitRepoSnapshot("aios: update root name");
       res.json({
         ok: true,
+        commit,
         root: {
           name: root.name,
           displayName: root.displayName,
@@ -245,6 +251,7 @@ export function registerDashboardRoutes(router: Router) {
   // ---------- Cron task controls ----------
   router.post("/api/cron/:path/pause", async (req, res) => {
     await guard(req, res);
+    await ensureRepoWritable();
     const tasks = await listCronTasks();
     const t = tasks.find((x) => x.relPath === decodeURIComponent(req.params.path));
     if (!t) throw notFound("task not found");
@@ -252,18 +259,23 @@ export function registerDashboardRoutes(router: Router) {
     const updated = raw.replace(/^(paused:\s*).*$/m, `$1true`);
     const next = updated === raw ? raw.replace(/^---\n/, `---\npaused: true\n`) : updated;
     await writeFile(t.path, next);
-    res.json({ ok: true });
+    await runSyncLayer({ commit: false }).catch(() => {});
+    const commit = await commitRepoSnapshot(`aios: pause cron ${t.relPath}`);
+    res.json({ ok: true, commit });
   });
 
   router.post("/api/cron/:path/resume", async (req, res) => {
     await guard(req, res);
+    await ensureRepoWritable();
     const tasks = await listCronTasks();
     const t = tasks.find((x) => x.relPath === decodeURIComponent(req.params.path));
     if (!t) throw notFound("task not found");
     const raw = await readFile(t.path, "utf-8");
     const updated = raw.replace(/^paused:\s*true\s*$/m, "paused: false");
     await writeFile(t.path, updated);
-    res.json({ ok: true });
+    await runSyncLayer({ commit: false }).catch(() => {});
+    const commit = await commitRepoSnapshot(`aios: resume cron ${t.relPath}`);
+    res.json({ ok: true, commit });
   });
 
   // ---------- Webhooks ----------
@@ -383,6 +395,7 @@ export function registerDashboardRoutes(router: Router) {
       paused: isGlobalPaused(),
       activeProcesses: activeProcessCount(),
       heartbeat: heartbeatStatus(),
+      gitSync: getGitSyncStatus(),
       providers: {
         claudeCode: { authorized: providers["claude-code"] },
         codex: { authorized: providers.codex },
@@ -392,7 +405,7 @@ export function registerDashboardRoutes(router: Router) {
   router.post("/api/controls/sync", async (req, res) => {
     await guard(req, res);
     const git = await syncRepoWithRemote({ notifyOnRemoteWins: true });
-    if (!git.ok) {
+    if (!git.ok || git.blocked) {
       res.json({ git, sync: null });
       return;
     }
@@ -447,6 +460,7 @@ export function registerDashboardRoutes(router: Router) {
 
   router.put("/api/files/*", async (req, res) => {
     await guard(req, res);
+    await ensureRepoWritable();
     const rel = decodeURIComponent(req.path.replace(/^\/api\/files\//, ""));
     const abs = join(config.repoDir, rel);
     if (!abs.startsWith(config.repoDir)) throw badRequest("path escape");
@@ -457,8 +471,16 @@ export function registerDashboardRoutes(router: Router) {
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, content);
     await runSyncLayer({ commit: false }).catch(() => {});
-    res.json({ ok: true });
+    const commit = await commitRepoSnapshot(`aios: update ${rel.replace(/\\/g, "/")}`);
+    res.json({ ok: true, commit });
   });
+}
+
+async function ensureRepoWritable() {
+  if (isGitWorktreeBlocked()) throw conflict("repo is busy with active agent work");
+  const git = await syncRepoWithRemote({ notifyOnRemoteWins: true });
+  if (!git.ok) throw conflict(git.error || "git sync failed");
+  if (git.blocked) throw conflict("repo is busy with active agent work");
 }
 
 async function validateProviderFrontmatter(relPath: string, content: string) {
