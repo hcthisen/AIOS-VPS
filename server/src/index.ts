@@ -14,6 +14,7 @@ import { registerGithubWebhookRoutes } from "./routes/github-webhook";
 import { attachTerminal } from "./terminal";
 import { startHeartbeat } from "./services/heartbeat";
 import { maybeServePublicObject } from "./services/publicBaseUrl";
+import { reconcileSystemUpdateState } from "./services/systemUpdate";
 import { startTelegramAgent } from "./services/telegramAgent";
 import { startTelegramUpdates } from "./services/telegramUpdates";
 
@@ -45,6 +46,7 @@ async function main() {
   });
 
   // Heartbeat kicks in automatically; it self-gates on setupPhase === "complete".
+  await reconcileSystemUpdateState().catch((e) => log.warn("system update recovery check failed", String(e?.message || e)));
   startHeartbeat();
   startTelegramUpdates();
   startTelegramAgent();

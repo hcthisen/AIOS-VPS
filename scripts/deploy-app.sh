@@ -4,6 +4,7 @@ set -euo pipefail
 
 AIOS_USER="${AIOS_USER:-aios}"
 AIOS_INSTALL_DIR="${AIOS_INSTALL_DIR:-/opt/aios}"
+AIOS_DEPLOY_SKIP_RESTART="${AIOS_DEPLOY_SKIP_RESTART:-0}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SYSTEM_VERSION_PATH="${AIOS_INSTALL_DIR}/data/system-version.json"
 SUDOERS_FILE="/etc/sudoers.d/aios-systemctl"
@@ -87,6 +88,10 @@ PY
 
 chown -R "${AIOS_USER}":"${AIOS_USER}" "${AIOS_INSTALL_DIR}"
 
-echo "[deploy-app] restarting aios"
-systemctl restart aios
-systemctl status aios --no-pager --lines=5 || true
+if [[ "${AIOS_DEPLOY_SKIP_RESTART}" == "1" || "${AIOS_DEPLOY_SKIP_RESTART}" == "true" ]]; then
+  echo "[deploy-app] restart skipped (AIOS_DEPLOY_SKIP_RESTART=${AIOS_DEPLOY_SKIP_RESTART})"
+else
+  echo "[deploy-app] restarting aios"
+  systemctl restart aios
+  systemctl status aios --no-pager --lines=5 || true
+fi

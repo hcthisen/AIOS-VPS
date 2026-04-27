@@ -127,6 +127,20 @@ run_logged() {
   "$@" >> "${LOG_PATH}" 2>&1
 }
 
+schedule_aios_restart() {
+  local unit="aios-post-update-restart-$(date +%s)"
+  log_line "Scheduling AIOS service restart"
+  if command -v systemd-run >/dev/null 2>&1; then
+    if systemd-run --unit="${unit}" --description="Restart AIOS after system update" --on-active=2s /usr/bin/systemctl restart aios >> "${LOG_PATH}" 2>&1; then
+      log_line "AIOS service restart scheduled via systemd-run (${unit})"
+      return 0
+    fi
+    log_line "systemd-run scheduling failed; falling back to nohup"
+  fi
+  nohup /bin/sh -c 'sleep 2; /usr/bin/systemctl restart aios' >> "${LOG_PATH}" 2>&1 &
+  log_line "AIOS service restart scheduled via nohup fallback"
+}
+
 prepare_auth
 trap cleanup EXIT
 
@@ -167,7 +181,7 @@ write_status \
   stage=deploying \
   message="Deploying AIOS-VPS application"
 
-run_logged env AIOS_USER="${AIOS_USER}" AIOS_INSTALL_DIR="${AIOS_INSTALL_DIR}" bash "${SOURCE_DIR}/scripts/deploy-app.sh" || fail "deploy failed"
+run_logged env AIOS_USER="${AIOS_USER}" AIOS_INSTALL_DIR="${AIOS_INSTALL_DIR}" AIOS_DEPLOY_SKIP_RESTART=1 bash "${SOURCE_DIR}/scripts/deploy-app.sh" || fail "deploy failed"
 
 write_status \
   inProgress=__false__ \
@@ -178,3 +192,4 @@ write_status \
   finishedAt=__now__
 
 log_line "System update completed successfully"
+schedule_aios_restart

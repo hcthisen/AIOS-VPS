@@ -212,6 +212,33 @@ async function clearStaleSystemUpdateLock(state: SystemUpdateState): Promise<Sys
   });
 }
 
+async function recoverInterruptedSuccessfulUpdate(
+  state: SystemUpdateState,
+  current: SystemVersionInfo | null,
+): Promise<SystemUpdateState> {
+  if (!(state.inProgress || state.maintenance)) return state;
+  if (state.stage !== "deploying") return state;
+  if (!current?.commit) return state;
+
+  const logTail = await readLogTail(20_000);
+  const reachedRestartBoundary = /\[deploy-app\] restarting aios|restart skipped|System update completed successfully/i.test(logTail);
+  if (!reachedRestartBoundary) return state;
+
+  const deployedLatest = !!state.latestCommit && current.commit === state.latestCommit;
+  const deployedAtMs = current.deployedAt ? Date.parse(current.deployedAt) : Number.NaN;
+  const deployedAfterStart = !!state.startedAt && Number.isFinite(deployedAtMs) && deployedAtMs >= state.startedAt - 60_000;
+  if (!deployedLatest && !deployedAfterStart) return state;
+
+  return await writeSystemUpdateState({
+    inProgress: false,
+    maintenance: false,
+    stage: "succeeded",
+    message: "System update complete",
+    finishedAt: Date.now(),
+    lastError: null,
+  });
+}
+
 async function resetSystemUpdateLog(): Promise<void> {
   const { log } = systemUpdatePaths();
   await mkdir(dirname(log), { recursive: true });
@@ -225,6 +252,14 @@ async function readLogTail(maxBytes = 12_000): Promise<string> {
   const raw = await readFile(log, "utf-8").catch(() => "");
   if (raw.length <= maxBytes) return raw;
   return raw.slice(raw.length - maxBytes);
+}
+
+export async function reconcileSystemUpdateState(current?: SystemVersionInfo | null): Promise<SystemUpdateState> {
+  const currentVersion = typeof current === "undefined" ? await readSystemVersion() : current;
+  let state = await readSystemUpdateState(currentVersion);
+  state = await recoverInterruptedSuccessfulUpdate(state, currentVersion);
+  state = await clearStaleSystemUpdateLock(state);
+  return state;
 }
 
 export function buildGitInvocation(repoUrl: string, creds = getGithubCreds()): GitInvocation {
@@ -316,7 +351,7 @@ async function refreshUpdateState(
 export async function getSystemUpdateSnapshot(opts: { forceCheck?: boolean; refreshIfStale?: boolean } = {}): Promise<SystemUpdateSnapshot> {
   const current = await readSystemVersion();
   const updaterConfig = getSystemUpdaterConfig(current);
-  let state = await clearStaleSystemUpdateLock(await readSystemUpdateState(current));
+  let state = await reconcileSystemUpdateState(current);
   if (updaterConfig.repoUrl && (opts.refreshIfStale || opts.forceCheck) && shouldRefresh(state, updaterConfig.repoUrl, updaterConfig.branch, !!opts.forceCheck)) {
     state = await refreshUpdateState(current, state, updaterConfig.repoUrl, updaterConfig.branch);
   }
@@ -337,7 +372,7 @@ function canStartUpdate(current: SystemVersionInfo | null, state: SystemUpdateSt
 }
 
 export async function isSystemUpdateBlocking(): Promise<boolean> {
-  const state = await clearStaleSystemUpdateLock(await readSystemUpdateState());
+  const state = await reconcileSystemUpdateState();
   return !!(state.inProgress || state.maintenance);
 }
 

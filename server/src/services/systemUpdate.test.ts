@@ -168,6 +168,40 @@ describe("systemUpdate", () => {
     assert.match(snapshot.state.lastError || "", /stale/i);
   });
 
+  it("recovers an interrupted successful deploy that was killed by service restart", async () => {
+    const { stdout: remoteHead } = await git(["rev-parse", "HEAD"], workRepo);
+    const remoteCommit = remoteHead.trim();
+
+    await writeFile(join(config.dataDir, "system-version.json"), JSON.stringify({
+      commit: remoteCommit,
+      branch: "main",
+      repoUrl: remoteUrl,
+      deployedAt: new Date().toISOString(),
+    }, null, 2) + "\n", "utf-8");
+    await writeFile(join(config.logsDir, "system-update.log"), [
+      "[deploy-app] building ui",
+      "[deploy-app] restarting aios",
+      "",
+    ].join("\n"), "utf-8");
+    await writeSystemUpdateState({
+      inProgress: true,
+      maintenance: true,
+      stage: "deploying",
+      message: "Deploying AIOS-VPS application",
+      startedAt: Date.now() - 10_000,
+      latestCommit: remoteCommit,
+      lastError: null,
+    });
+
+    const snapshot = await getSystemUpdateSnapshot();
+
+    assert.equal(snapshot.state.inProgress, false);
+    assert.equal(snapshot.state.maintenance, false);
+    assert.equal(snapshot.state.stage, "succeeded");
+    assert.equal(snapshot.state.lastError, null);
+    assert.equal(await isSystemUpdateBlocking(), false);
+  });
+
   it("keeps HTTPS updater URLs on HTTPS even when deploy-key credentials exist", async () => {
     const git = buildGitInvocation("https://github.com/hcthisen/AIOS-VPS", {
       mode: "deploy_key",
