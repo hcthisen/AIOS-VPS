@@ -72,6 +72,7 @@ interface CronEditorState {
   name: string;
   schedule: string;
   provider: string;
+  paused: boolean;
   prompt: string;
 }
 
@@ -168,8 +169,20 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       setNotice,
     );
 
+  const deleteCron = (task: CronTask) => {
+    if (!window.confirm(`Delete task "${task.name}"? This removes the task file from the repo.`)) return;
+    runAction(
+      `cron-${task.relPath}-delete`,
+      async () => {
+        await api(`/api/cron/${encodeURIComponent(task.relPath)}`, { method: "DELETE" });
+        await refresh();
+      },
+      setNotice,
+    );
+  };
+
   const openCreateCron = () => setCronEditor({
-    mode: "create", relPath: null, name: "", schedule: "0 * * * *", provider: "", prompt: "",
+    mode: "create", relPath: null, name: "", schedule: "0 * * * *", provider: "", paused: false, prompt: "",
   });
   const openEditCron = async (task: CronTask) => {
     const text = await api<string>(fileUrl(task.relPath)).catch(() => "");
@@ -180,6 +193,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       name: task.name,
       schedule: task.schedule || "0 * * * *",
       provider: task.provider || "",
+      paused: !!task.paused,
       prompt,
     });
   };
@@ -188,8 +202,9 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       if (!cronEditor) return;
       const prompt = cronEditor.prompt.trim();
       if (!prompt) throw new Error("prompt is required");
-      const providerLine = cronEditor.provider ? `provider: ${cronEditor.provider}\n` : "";
-      const body = `---\nschedule: "${cronEditor.schedule}"\n${providerLine}---\n\n${prompt}\n`;
+      if (!cronEditor.provider) throw new Error("provider is required");
+      const pausedLine = cronEditor.paused ? "paused: true\n" : "";
+      const body = `---\nschedule: "${cronEditor.schedule}"\nprovider: ${cronEditor.provider}\n${pausedLine}---\n\n${prompt}\n`;
       const relPath = cronEditor.mode === "create"
         ? buildRelPath(name, "cron", cronEditor.name)
         : cronEditor.relPath!;
@@ -198,6 +213,18 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       await refresh();
       setCronEditor(null);
     }, setNotice);
+
+  const deleteGoal = (goal: Goal) => {
+    if (!window.confirm(`Delete goal "${goal.name}"? This removes the goal file from the repo.`)) return;
+    runAction(
+      `goal-${goal.relPath}-delete`,
+      async () => {
+        await api(`/api/goals/${encodeURIComponent(goal.relPath)}`, { method: "DELETE" });
+        await refresh();
+      },
+      setNotice,
+    );
+  };
 
   const openCreateGoal = () => setGoalEditor({
     mode: "create", relPath: null, name: "", status: "active", schedule: "0 9 * * *", provider: "", prompt: "",
@@ -220,8 +247,8 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
       if (!goalEditor) return;
       const prompt = goalEditor.prompt.trim();
       if (!prompt) throw new Error("prompt is required");
-      const providerLine = goalEditor.provider ? `provider: ${goalEditor.provider}\n` : "";
-      const body = `---\nstatus: ${goalEditor.status}\nschedule: "${goalEditor.schedule}"\n${providerLine}state: {}\n---\n\n${prompt}\n`;
+      if (!goalEditor.provider) throw new Error("provider is required");
+      const body = `---\nstatus: ${goalEditor.status}\nschedule: "${goalEditor.schedule}"\nprovider: ${goalEditor.provider}\nstate: {}\n---\n\n${prompt}\n`;
       const relPath = goalEditor.mode === "create"
         ? buildRelPath(name, "goals", goalEditor.name)
         : goalEditor.relPath!;
@@ -250,10 +277,10 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
   const claudeAuthorized = !!providers?.claudeCode?.authorized;
   const codexAuthorized = !!providers?.codex?.authorized;
   const hasAuthorizedProvider = claudeAuthorized || codexAuthorized;
-  const cronProviderAuthorized = !cronEditor?.provider
-    || (cronEditor.provider === "claude-code" ? claudeAuthorized : codexAuthorized);
-  const goalProviderAuthorized = !goalEditor?.provider
-    || (goalEditor.provider === "claude-code" ? claudeAuthorized : codexAuthorized);
+  const cronProviderAuthorized = !!cronEditor?.provider
+    && (cronEditor.provider === "claude-code" ? claudeAuthorized : codexAuthorized);
+  const goalProviderAuthorized = !!goalEditor?.provider
+    && (goalEditor.provider === "claude-code" ? claudeAuthorized : codexAuthorized);
 
   const tabs = [
     { id: "tasks", label: `Tasks${d.cron?.length ? ` (${d.cron.length})` : ""}` },
@@ -320,6 +347,7 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                           <IconButton onClick={() => togglePause(task)}>
                             {task.paused ? "Resume" : "Pause"}
                           </IconButton>
+                          <IconButton onClick={() => deleteCron(task)}>Delete</IconButton>
                         </div>
                       </td>
                     </tr>
@@ -359,7 +387,10 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                       <td>{goal.status}</td>
                       <td>{goal.provider || "-"}</td>
                       <td style={{ textAlign: "right" }}>
-                        <IconButton onClick={() => openEditGoal(goal)}>Edit</IconButton>
+                        <div className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
+                          <IconButton onClick={() => openEditGoal(goal)}>Edit</IconButton>
+                          <IconButton onClick={() => deleteGoal(goal)}>Delete</IconButton>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -496,9 +527,9 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
             <FeedbackButton
               className="primary"
               state={actions["cron-save"] || "idle"}
-              idleLabel="Save"
-              workingLabel="Saving..."
-              okLabel="Saved"
+              idleLabel={cronEditor.mode === "create" ? "Create task" : "Save"}
+              workingLabel={cronEditor.mode === "create" ? "Creating..." : "Saving..."}
+              okLabel={cronEditor.mode === "create" ? "Created" : "Saved"}
               onClick={saveCron}
               disabled={!hasAuthorizedProvider || !cronProviderAuthorized}
             />
@@ -526,13 +557,14 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                 value={cronEditor.provider}
                 onChange={(e) => setCronEditor({ ...cronEditor, provider: e.target.value })}
               >
-                <option value="">Default provider</option>
+                <option value="" disabled>Select provider</option>
                 <option value="claude-code" disabled={!claudeAuthorized}>Claude Code{claudeAuthorized ? "" : " (not connected)"}</option>
                 <option value="codex" disabled={!codexAuthorized}>Codex{codexAuthorized ? "" : " (not connected)"}</option>
               </select>
             </label>
             {!hasAuthorizedProvider && <div className="small muted">Connect Claude Code or Codex in Settings before scheduling agents.</div>}
-            {cronEditor.provider && !cronProviderAuthorized && <div className="small muted">Selected provider is not connected. Pick an authorized provider or use default.</div>}
+            {!cronEditor.provider && hasAuthorizedProvider && <div className="small muted">Select a provider before saving this task.</div>}
+            {cronEditor.provider && !cronProviderAuthorized && <div className="small muted">Selected provider is not connected. Pick an authorized provider.</div>}
             <label className="col drawer-fill">
               <span className="small muted">Prompt</span>
               <textarea
@@ -556,9 +588,9 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
             <FeedbackButton
               className="primary"
               state={actions["goal-save"] || "idle"}
-              idleLabel="Save"
-              workingLabel="Saving..."
-              okLabel="Saved"
+              idleLabel={goalEditor.mode === "create" ? "Create goal" : "Save"}
+              workingLabel={goalEditor.mode === "create" ? "Creating..." : "Saving..."}
+              okLabel={goalEditor.mode === "create" ? "Created" : "Saved"}
               onClick={saveGoal}
               disabled={!hasAuthorizedProvider || !goalProviderAuthorized}
             />
@@ -598,13 +630,14 @@ export function DepartmentDetail({ name, navigate }: { name: string; navigate: (
                 value={goalEditor.provider}
                 onChange={(e) => setGoalEditor({ ...goalEditor, provider: e.target.value })}
               >
-                <option value="">Default provider</option>
+                <option value="" disabled>Select provider</option>
                 <option value="claude-code" disabled={!claudeAuthorized}>Claude Code{claudeAuthorized ? "" : " (not connected)"}</option>
                 <option value="codex" disabled={!codexAuthorized}>Codex{codexAuthorized ? "" : " (not connected)"}</option>
               </select>
             </label>
             {!hasAuthorizedProvider && <div className="small muted">Connect Claude Code or Codex in Settings before scheduling agents.</div>}
-            {goalEditor.provider && !goalProviderAuthorized && <div className="small muted">Selected provider is not connected. Pick an authorized provider or use default.</div>}
+            {!goalEditor.provider && hasAuthorizedProvider && <div className="small muted">Select a provider before saving this goal.</div>}
+            {goalEditor.provider && !goalProviderAuthorized && <div className="small muted">Selected provider is not connected. Pick an authorized provider.</div>}
             <label className="col drawer-fill">
               <span className="small muted">Prompt</span>
               <textarea

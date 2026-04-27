@@ -891,8 +891,8 @@ AIOS turns this Git repository into an autonomous operating workspace: the root 
 
 - Heartbeat: runs about once per minute after onboarding is complete. Each tick pulls the repo, runs sync, scans due cron tasks, checks scheduled goal wakeups, and starts or queues runs if the target scope is free.
 - Sync: runs after each successful pull and after successful agent runs. It mirrors \`CLAUDE.md\` and \`AGENTS.md\`, copies root \`org.md\` into departments, regenerates \`_org.md\`, and mirrors \`skills/\` into provider-specific skill folders.
-- Cron: put scheduled prompts in \`cron/*.md\` with frontmatter like \`schedule: "0 * * * *"\`, optional \`provider\`, and optional \`paused: true\`. Pause jobs instead of deleting them.
-- Goals: put long-running objectives in \`goals/*.md\` with \`status: active|paused|complete\`, \`schedule: "0 9 * * *"\`, optional \`provider\`, and \`state: {}\`. Goals are checked once per heartbeat but only run when their own schedule is due; use daily/weekly schedules for strategy or growth work and shorter intervals only for lightweight monitoring.
+- Cron: put scheduled prompts in \`cron/*.md\` with frontmatter like \`schedule: "0 * * * *"\`, required \`provider: claude-code|codex\`, and optional \`paused: true\`.
+- Goals: put long-running objectives in \`goals/*.md\` with \`status: active|paused|complete\`, \`schedule: "0 9 * * *"\`, required \`provider: claude-code|codex\`, and \`state: {}\`. Goals are checked once per heartbeat but only run when their own schedule is due; use daily/weekly schedules for strategy or growth work and shorter intervals only for lightweight monitoring.
 - Skills: put reusable procedures in \`skills/<name>/SKILL.md\`. AIOS syncs them for both Claude Code and Codex so agents can reliably create, edit, and pause cron tasks and goals.
 - Outbox: agents write owner-facing notifications to \`outbox/*.md\` only when explicitly requested or when an important incident happens. AIOS stores the message, clears the file, shows it in Overview, and delivers it through Telegram/email when configured.
 - Root scope: root-level \`cron/\`, \`goals/\`, \`skills/\`, and \`outbox/\` are for maintenance or cross-department work that should start from the repository root.
@@ -931,8 +931,13 @@ export async function ensureAutomationWorkspace(dir: string): Promise<string[]> 
 
 function shouldRefreshDefaultSkill(rel: string, current: string): boolean {
   if (!current.trim()) return true;
+  if (rel === "skills/cron-management/SKILL.md") {
+    return current.includes("otherwise omit it") || current.includes("Never delete a cron job");
+  }
   if (rel === "skills/goal-management/SKILL.md") {
-    return current.includes("Active goals are evaluated about once per heartbeat");
+    return current.includes("Active goals are evaluated about once per heartbeat")
+      || current.includes("otherwise omit it")
+      || current.includes("Never delete a goal");
   }
   return false;
 }
@@ -959,11 +964,11 @@ Do the scheduled work.
 \`\`\`
 
 Rules:
-- Never delete a cron job. If it should stop running, set \`paused: true\`.
+- Use \`provider: claude-code\` or \`provider: codex\`; provider is required.
+- If a task should stop running but remain available, set \`paused: true\`.
 - Keep the filename stable when editing an existing task so run history and references remain understandable.
 - Use standard five-field cron expressions unless the existing task already uses another supported form.
 - Keep prompts specific, bounded, and safe to run unattended.
-- Use \`provider: claude-code\` or \`provider: codex\` only when the task needs a specific provider; otherwise omit it.
 - When re-enabling a paused task, set \`paused: false\` or remove the paused field.
 `;
 }
@@ -991,7 +996,8 @@ Advance this objective by taking the next smallest useful step.
 \`\`\`
 
 Rules:
-- Never delete a goal. If it should stop running, set \`status: paused\`.
+- Use \`provider: claude-code\` or \`provider: codex\`; provider is required.
+- If a goal should stop running but remain available, set \`status: paused\`.
 - Mark a goal \`status: complete\` only when its definition of done is satisfied.
 - Keep \`state\` small and factual so future runs can resume without rereading unrelated history.
 - Each active goal has a \`schedule\` field that controls when AIOS wakes it up. AIOS checks goals every heartbeat, but only starts a goal when its own schedule is due.
@@ -999,7 +1005,6 @@ Rules:
 - Do not set wake intervals below 10 minutes unless the goal is very short monitoring work; frequent wakeups can create backlog and waste budget.
 - If no useful work is due when woken, exit cleanly after updating \`state\` only if that helps future runs.
 - Keep goals outcome-oriented; put recurring fixed-time work in cron instead.
-- Use \`provider: claude-code\` or \`provider: codex\` only when the goal needs a specific provider; otherwise omit it.
 `;
 }
 

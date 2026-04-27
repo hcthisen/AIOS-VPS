@@ -1,7 +1,7 @@
 // Dashboard API: departments, runs, backlog, webhooks, usage, manual prompt,
 // kill switches, pause/resume, live stream (SSE), sync trigger.
 
-import { readFile, writeFile, mkdir, stat, readdir } from "fs/promises";
+import { readFile, writeFile, mkdir, stat, readdir, unlink } from "fs/promises";
 import { existsSync } from "fs";
 import { dirname, join } from "path";
 import { timingSafeEqual } from "crypto";
@@ -278,6 +278,24 @@ export function registerDashboardRoutes(router: Router) {
     res.json({ ok: true, commit });
   });
 
+  router.delete("/api/cron/:path", async (req, res) => {
+    await guard(req, res);
+    await ensureRepoWritable();
+    const t = await deleteCronTaskFile(decodeURIComponent(req.params.path));
+    await runSyncLayer({ commit: false }).catch(() => {});
+    const commit = await commitRepoSnapshot(`aios: delete cron ${t.relPath}`);
+    res.json({ ok: true, commit });
+  });
+
+  router.delete("/api/goals/:path", async (req, res) => {
+    await guard(req, res);
+    await ensureRepoWritable();
+    const g = await deleteGoalFile(decodeURIComponent(req.params.path));
+    await runSyncLayer({ commit: false }).catch(() => {});
+    const commit = await commitRepoSnapshot(`aios: delete goal ${g.relPath}`);
+    res.json({ ok: true, commit });
+  });
+
   // ---------- Webhooks ----------
   router.get("/api/webhooks/handlers", async (req, res) => {
     await guard(req, res);
@@ -483,15 +501,33 @@ async function ensureRepoWritable() {
   if (git.blocked) throw conflict("repo is busy with active agent work");
 }
 
-async function validateProviderFrontmatter(relPath: string, content: string) {
+export async function deleteCronTaskFile(relPath: string) {
+  const tasks = await listCronTasks();
+  const task = tasks.find((x) => x.relPath === relPath);
+  if (!task) throw notFound("task not found");
+  await unlink(task.path);
+  db.prepare("DELETE FROM cron_state WHERE path = ?").run(task.path);
+  return task;
+}
+
+export async function deleteGoalFile(relPath: string) {
+  const goals = await listGoals();
+  const goal = goals.find((x) => x.relPath === relPath);
+  if (!goal) throw notFound("goal not found");
+  await unlink(goal.path);
+  db.prepare("DELETE FROM goal_state WHERE path = ?").run(goal.path);
+  return goal;
+}
+
+export async function validateProviderFrontmatter(relPath: string, content: string) {
   if (!/(^|\/)(cron|goals)\/[^/]+\.md$/i.test(relPath.replace(/\\/g, "/"))) return;
-  let provider: string | undefined;
+  let provider = "";
   try {
-    provider = matter(content).data?.provider;
+    provider = String(matter(content).data?.provider || "").trim();
   } catch {
-    return;
+    throw badRequest("invalid frontmatter");
   }
-  if (!provider) return;
+  if (!provider) throw badRequest("provider is required");
   const parsed = parseProvider(provider);
   if (!parsed) throw badRequest("provider must be claude-code or codex");
   if (!(await isProviderAuthorized(parsed))) {
