@@ -15,7 +15,7 @@ import {
   anthropicAuthDetected, codexAuthDetected,
 } from "./provider-auth";
 import { readEnvFile, toMap } from "./envFile";
-import { Run, createRun, updateRun, runEvents, popBacklog, enqueueBacklog, getRun } from "./runs";
+import { Run, createRun, updateRun, runEvents, popBacklog, enqueueBacklog, getRun, listBacklog } from "./runs";
 import { claimDepartments, releaseClaimsForRun, expireStaleClaims } from "./claims";
 import { gitRun, markInboundSyncPending, setGitWorktreeBlocked, syncRepoWithRemote } from "./repo";
 import { runSyncLayer } from "./sync";
@@ -217,6 +217,48 @@ export async function startRun(req: RunRequest): Promise<StartRunResult> {
   return { run: getRun(run.id)!, accepted: true };
 }
 
+async function startQueuedRun(runId: string, req: RunRequest): Promise<StartRunResult | null> {
+  const existing = getRun(runId);
+  if (!existing || existing.status !== "queued") return null;
+
+  if (req.provider && !(await isProviderAuthorized(req.provider))) {
+    updateRun(runId, {
+      status: "canceled",
+      ended_at: Date.now(),
+      error: `${displayProvider(req.provider)} is not authorized`,
+    });
+    return { run: getRun(runId)!, accepted: false, reason: `${displayProvider(req.provider)} is not authorized` };
+  }
+  if (globalPaused) {
+    updateRun(runId, { status: "canceled", ended_at: Date.now(), error: "global pause" });
+    return { run: getRun(runId)!, accepted: false, reason: "global pause" };
+  }
+  if (await isSystemUpdateBlocking()) {
+    updateRun(runId, { status: "canceled", ended_at: Date.now(), error: "system update in progress" });
+    return { run: getRun(runId)!, accepted: false, reason: "system update in progress" };
+  }
+
+  expireStaleClaims();
+  const depts = req.departments.length ? req.departments : ["_root"];
+  const claimed = claimDepartments(depts, runId);
+  if (!claimed) {
+    for (const d of depts) enqueueBacklog(d, req.trigger, {
+      runId,
+      prompt: req.prompt,
+      provider: req.provider,
+      departments: depts,
+      conversation: req.conversation,
+    });
+    updateRun(runId, { error: "department busy; queued to backlog" });
+    return { run: getRun(runId)!, accepted: false, queued: true };
+  }
+
+  void actuallyRun(runId, depts, req).catch((e) => {
+    log.error("run error", runId, e?.message || e);
+  });
+  return { run: getRun(runId)!, accepted: true };
+}
+
 async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
   const git = await syncRepoWithRemote({ notifyOnRemoteWins: true });
   if (!git.ok) {
@@ -229,7 +271,7 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
   const logPath = join(logDir, `${runId}.log`);
   await mkdir(logDir, { recursive: true });
   await writeFile(logPath, `# run ${runId}\n# trigger ${req.trigger}\n# provider ${provider}\n# dept ${depts.join(",")}\n# started ${new Date().toISOString()}\n\n`);
-  updateRun(runId, { status: "running", log_path: logPath, provider });
+  updateRun(runId, { status: "running", log_path: logPath, provider, error: null });
 
   // Primary department folder is the cwd.
   const cwd = depts[0] === "_root" ? config.repoDir : join(config.repoDir, depts[0]);
@@ -345,23 +387,63 @@ async function finalize(
   releaseClaimsForRun(runId);
   runEvents.emit("run.finished", { runId, conversation: conversation || null });
 
-  // Process any backlog items for these departments.
+  await processBacklogForDepartments(depts);
+}
+
+export async function processBacklogForDepartments(depts: string[]) {
   for (const d of depts) {
     const next = popBacklog(d);
     if (!next) continue;
     try {
       const payload = JSON.parse(next.payload);
-      await startRun({
+      const originalRunId = typeof payload.runId === "string" ? payload.runId : null;
+      const replay: RunRequest = {
         departments: payload.departments || [d],
-        trigger: `backlog:${next.trigger}`,
+        trigger: next.trigger,
         prompt: payload.prompt,
         provider: payload.provider,
         conversation: payload.conversation,
-      });
+      };
+      const resumed = originalRunId ? await startQueuedRun(originalRunId, replay) : null;
+      if (!resumed) {
+        await startRun({ ...replay, trigger: `backlog:${next.trigger}` });
+      }
     } catch (e: any) {
       log.warn("failed to dispatch backlog item", next.id, e?.message || e);
     }
   }
+}
+
+export function recoverOrphanedQueuedBacklogRuns(): number {
+  const queued = db.prepare(`
+    SELECT id FROM runs
+    WHERE status = 'queued'
+      AND error = 'department busy; queued to backlog'
+  `).all() as Array<{ id: string }>;
+  if (!queued.length) return 0;
+
+  const referencedRunIds = new Set<string>();
+  for (const item of listBacklog()) {
+    try {
+      const payload = JSON.parse(item.payload);
+      if (typeof payload.runId === "string") referencedRunIds.add(payload.runId);
+    } catch {}
+  }
+
+  let recovered = 0;
+  const now = Date.now();
+  for (const run of queued) {
+    if (referencedRunIds.has(run.id)) continue;
+    const claimed = db.prepare("SELECT 1 FROM claims WHERE run_id = ?").get(run.id);
+    if (claimed) continue;
+    updateRun(run.id, {
+      status: "canceled",
+      ended_at: now,
+      error: "backlog item already dispatched or removed",
+    });
+    recovered += 1;
+  }
+  return recovered;
 }
 
 async function tryCommitAndPush(runId: string, dept: string, trigger: string): Promise<string | null> {
