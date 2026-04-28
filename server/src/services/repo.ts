@@ -88,6 +88,24 @@ export async function gitRun(args: string[], cwd = config.repoDir, env: NodeJS.P
   return execFileAsync("git", args, { cwd, env });
 }
 
+export function cleanGitHubHttpsRemoteUrl(remoteUrl: string | null | undefined): string | null {
+  const raw = String(remoteUrl || "").trim();
+  if (!raw || !/^https:\/\//i.test(raw)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.hostname.toLowerCase() !== "github.com") return null;
+  const parts = parsed.pathname.replace(/^\/+|\/+$/g, "").split("/");
+  if (parts.length < 2 || !parts[0] || !parts[1]) return null;
+  const owner = parts[0];
+  const repo = parts[1].replace(/\.git$/i, "");
+  if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) return null;
+  return `https://github.com/${owner}/${repo}.git`;
+}
+
 function repoPathspecs(paths: string[]): string[] {
   const repoRoot = resolve(config.repoDir);
   const seen = new Set<string>();
@@ -308,6 +326,17 @@ function ensureGitAskpassScript(): string {
   return path;
 }
 
+async function normalizeGithubPatOriginRemote(): Promise<void> {
+  const creds = getGithubCreds();
+  if (creds?.mode !== "pat" || !creds.token) return;
+  const current = await gitRun(["config", "--get", "remote.origin.url"], config.repoDir, buildCommonAuthEnv())
+    .then((r) => r.stdout.trim())
+    .catch(() => "");
+  const clean = cleanGitHubHttpsRemoteUrl(current);
+  if (!clean || clean === current) return;
+  await gitRun(["remote", "set-url", "origin", clean], config.repoDir, buildCommonAuthEnv());
+}
+
 export async function cloneRepo(input: {
   cloneUrl: string; creds: GithubCreds;
 }): Promise<{ ok: true; commit: string } | { ok: false; error: string }> {
@@ -326,6 +355,7 @@ export async function cloneRepo(input: {
         }
       : buildGitEnv();
     if (existsSync(join(config.repoDir, ".git"))) {
+      await normalizeGithubPatOriginRemote();
       await gitRun(["pull", "--ff-only"], config.repoDir, env);
     } else {
       await execFileAsync("git", ["clone", url, config.repoDir], { env });
@@ -403,6 +433,7 @@ async function syncRepoWithRemoteUnlocked(opts: { notifyOnRemoteWins?: boolean; 
         error: "repo not cloned",
       };
     }
+    await normalizeGithubPatOriginRemote();
     before = (await gitRun(["rev-parse", "HEAD"])).stdout.trim();
     await gitRun(["fetch", "origin", "--prune"]);
     upstream = await resolveUpstream();

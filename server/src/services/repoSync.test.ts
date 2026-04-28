@@ -7,7 +7,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 import { config } from "../config";
-import { checkRemoteForUpdates, getGitSyncStatus, reconcilePendingRepoSync, setGitWorktreeBlocked, syncRepoWithRemote } from "./repo";
+import { cleanGitHubHttpsRemoteUrl, checkRemoteForUpdates, getGitSyncStatus, reconcilePendingRepoSync, setGitWorktreeBlocked, syncRepoWithRemote } from "./repo";
 
 const execFileAsync = promisify(execFile);
 
@@ -137,5 +137,20 @@ describe("syncRepoWithRemote", () => {
     assert.equal(blocked?.blocked, true);
     assert.equal(getGitSyncStatus().pendingInboundSync, true);
     assert.equal(await readNormalized(join(localRepo, "cron.md")), "initial\n");
+  });
+});
+
+describe("GitHub remote cleanup", () => {
+  it("removes embedded HTTPS credentials from GitHub remotes", () => {
+    assert.equal(
+      cleanGitHubHttpsRemoteUrl("https://old-user:old-token@github.com/hcthisen/aios-titanclaws.git/"),
+      "https://github.com/hcthisen/aios-titanclaws.git",
+    );
+    assert.equal(
+      cleanGitHubHttpsRemoteUrl("https://github.com/hcthisen/aios-titanclaws.git"),
+      "https://github.com/hcthisen/aios-titanclaws.git",
+    );
+    assert.equal(cleanGitHubHttpsRemoteUrl("git@github.com:hcthisen/aios-titanclaws.git"), null);
+    assert.equal(cleanGitHubHttpsRemoteUrl("https://example.com/hcthisen/aios-titanclaws.git"), null);
   });
 });
