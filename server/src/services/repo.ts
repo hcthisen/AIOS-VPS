@@ -4,7 +4,7 @@ import { randomBytes } from "crypto";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { mkdir, writeFile, readFile, stat, rm } from "fs/promises";
-import { existsSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { join, dirname, relative, resolve, sep } from "path";
 import matter from "gray-matter";
 
@@ -65,6 +65,7 @@ export interface GitSyncStatus {
 const DEFAULT_REMOTE_POLL_INTERVAL_MS = Number(process.env.AIOS_GIT_POLL_INTERVAL_MS || 60_000);
 const LLM_CONFLICT_TIMEOUT_MS = Number(process.env.AIOS_GIT_CONFLICT_TIMEOUT_MS || 5 * 60_000);
 const LLM_CONFLICT_MAX_FILE_BYTES = Number(process.env.AIOS_GIT_CONFLICT_MAX_FILE_BYTES || 200_000);
+let gitAskpassPath: string | null = null;
 let worktreeBlocked = () => false;
 let gitQueue: Promise<unknown> = Promise.resolve();
 const gitSyncStatus: GitSyncStatus = {
@@ -263,7 +264,48 @@ function buildGitEnv(): NodeJS.ProcessEnv {
       GIT_SSH_COMMAND: `ssh -i "${creds.privateKeyPath}" -o StrictHostKeyChecking=accept-new`,
     };
   }
+  if (creds?.mode === "pat" && creds.username && creds.token) {
+    return {
+      ...gitEnv,
+      GIT_ASKPASS: ensureGitAskpassScript(),
+      GIT_TERMINAL_PROMPT: "0",
+      AIOS_GIT_USERNAME: creds.username,
+      AIOS_GIT_PASSWORD: creds.token,
+    };
+  }
   return gitEnv;
+}
+
+function ensureGitAskpassScript(): string {
+  if (gitAskpassPath && existsSync(gitAskpassPath)) return gitAskpassPath;
+  const suffix = process.platform === "win32" ? ".cmd" : ".sh";
+  const path = join(config.dataDir, `git-askpass${suffix}`);
+  if (process.platform === "win32") {
+    try { mkdirSync(dirname(path), { recursive: true }); } catch {}
+    writeFileSync(path, [
+      "@echo off",
+      "echo %1 | findstr /i \"username\" >nul",
+      "if %errorlevel%==0 (",
+      "  echo %AIOS_GIT_USERNAME%",
+      ") else (",
+      "  echo %AIOS_GIT_PASSWORD%",
+      ")",
+      "",
+    ].join("\r\n"), "utf-8");
+  } else {
+    try { mkdirSync(dirname(path), { recursive: true }); } catch {}
+    writeFileSync(path, [
+      "#!/usr/bin/env sh",
+      "case \"$1\" in",
+      "  *sername*) printf '%s\\n' \"$AIOS_GIT_USERNAME\" ;;",
+      "  *) printf '%s\\n' \"$AIOS_GIT_PASSWORD\" ;;",
+      "esac",
+      "",
+    ].join("\n"), "utf-8");
+    try { chmodSync(path, 0o700); } catch {}
+  }
+  gitAskpassPath = path;
+  return path;
 }
 
 export async function cloneRepo(input: {
