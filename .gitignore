@@ -10,6 +10,7 @@ ui/dist/
 # Local state
 data/
 logs/
+test-results/
 .env
 .env.*
 

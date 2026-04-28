@@ -32,17 +32,19 @@ Visit `http://<vps-ip>:3100`. The page prompts you to create the first admin. Af
 
 1. **Domain** — DNS verification → `Configure HTTPS` writes `/etc/caddy/Caddyfile` and brings Caddy up. The server self-restarts; the browser is redirected to `https://<domain>/setup/providers`.
 2. **Providers** — Connect Claude Code (OAuth PKCE paste flow) and/or Codex (device-auth with a big monospaced user code and a clickable URL). Skip links are always available.
-3. **GitHub** — Paste a PAT with `repo` scope.
-4. **Repo** — Create a new repo (scaffolded with `aios.yaml` + sample department) or attach an existing repo (validated for `aios.yaml`).
-5. **Notifications** — Telegram or SMTP. "Save and send test" verifies end-to-end.
-6. **Complete** — `setupPhase = complete`, the heartbeat begins ticking, and the main dashboard is reachable.
+3. **GitHub** — Paste a PAT with `repo` scope. PAT mode is the supported onboarding path for creating or attaching a repo and for automatic GitHub webhook setup.
+4. **Repo** — Create a new repo (scaffolded with `aios.yaml`, root context, automation folders, and a sample department) or attach an existing repo (validated for `aios.yaml`).
+5. **Context** — Confirm organization and deployment-scope context. AIOS writes root `org.md`, `CLAUDE.md`, and `AGENTS.md`, then syncs shared context into departments.
+6. **Notifications** — Telegram, SMTP email, or none. Telegram pairing requires saving the bot token, sending the bot a message, and approving the detected chat.
+7. **Complete** — `setupPhase = complete`, the heartbeat begins ticking, and the main dashboard is reachable.
 
 When using a PAT, AIOS automatically creates or updates a GitHub `push` webhook for the connected repo. The webhook points to `/github/webhook` on the configured dashboard URL and uses an AIOS-managed HMAC secret. If the webhook cannot be created because the PAT lacks repo admin/webhook permission, AIOS still falls back to polling GitHub every 60 seconds.
 
 After onboarding, `Settings` can be used to:
 - re-authorize Claude Code or Codex
-- reconnect GitHub
+- reconnect GitHub with a PAT or deploy key
 - update notifications
+- enable the Telegram Root Agent once Telegram is paired
 - apply future AIOS-VPS updates in place from `https://github.com/hcthisen/AIOS-VPS`
 
 ## 4. Verify
@@ -59,7 +61,7 @@ systemctl status caddy
 curl -s http://localhost:3100/api/controls/status -H "Cookie: aios_session=…" -H "x-csrf: …"
 ```
 
-The sample department has `sample/cron/hello.md` set to `0 * * * *`. Edit the file to `* * * * *` (push to GitHub) and a run appears within one heartbeat.
+The sample department has `sample/cron/hello.md` set to `0 * * * *` with `provider: claude-code`. Edit the schedule to `* * * * *` and choose an authorized provider if needed; after the change is saved or pushed to GitHub, a run appears within one heartbeat.
 
 ## 5. Upgrade
 

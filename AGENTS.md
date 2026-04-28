@@ -15,10 +15,10 @@
 Use strict TypeScript and match the existing style: 2-space indentation, semicolons, and double-quoted imports/strings. React page components use PascalCase filenames such as `DepartmentDetail.tsx`; backend modules use lower-case, descriptive filenames such as `services/sync.ts` and `routes/github.ts`. Prefer small, single-purpose modules and camelCase for exported functions.
 
 ## Testing Guidelines
-There are currently no committed test files. Add backend coverage as `*.test.ts` under `server/src` near the feature being exercised, then build and run `npm test`. For UI changes, manually verify the affected flow with both local servers running, especially setup, auth, routing, and terminal-related behavior.
+Backend tests are committed as `*.test.ts` under `server/src/routes` and `server/src/services`. Add coverage near the feature being exercised, then run `cd server && npm run build && npm test` because the test runner targets compiled files in `server/dist`. For UI changes, manually verify the affected flow with both local servers running, especially setup, auth, routing, storage, and terminal-related behavior.
 
 ## Commit & Pull Request Guidelines
-Recent commits use short, imperative subjects such as `Add README and build/implementation PLAN` and `Implement all 9 PLAN phases`. Follow that pattern, keep the summary specific, and separate unrelated changes. Pull requests should include scope, risk, verification commands, linked issues or plan sections, and screenshots for dashboard-facing changes.
+Recent commits use short, imperative subjects. Follow that pattern, keep the summary specific, and separate unrelated changes. Pull requests should include scope, risk, verification commands, linked issues when relevant, and screenshots for dashboard-facing changes.
 
 ## Security & Configuration Notes
 Do not commit `.env`, `data/`, `logs/`, build artifacts, or provider credentials. When changing onboarding, auth, or deployment behavior, update the matching docs in the same change so operators do not end up with stale runbooks.

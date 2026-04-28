@@ -14,13 +14,15 @@ See [`AIOS-PRD.md`](./AIOS-PRD.md) for the full product specification.
 ## Features
 
 - Scheduled (cron), webhook, and manual triggers
-- Department folders (`CLAUDE.md`, `cron/`, `goals/`, `skills/`, `.env`, `logs/`)
+- Root and department execution scopes (`CLAUDE.md` / `AGENTS.md`, `cron/`, `goals/`, `skills/`, `.env`, `webhooks/`, `outbox/`, `logs/`)
 - Per-folder claims with backlog queue
 - Two-way GitHub sync (pull before run, commit + push after)
 - GitHub push webhook registration when using a PAT, with 60-second polling fallback
 - System-managed sync layer: `CLAUDE.md ↔ AGENTS.md`, `org.md` propagation, auto-generated `_org.md`
 - Provider-neutral execution (Claude Code or Codex, selectable per task)
-- Telegram / email notifications
+- Owner notification outbox with Telegram / email delivery
+- Optional inbound Telegram Root Agent chat
+- Per-department S3-compatible file storage with dashboard browsing and public URL support
 - Self-update from Settings against the configured AIOS-VPS repo/branch
 - Re-authorize providers, GitHub, and notifications from Settings after onboarding
 - Embedded terminal, per-run and global kill switches
@@ -60,7 +62,8 @@ See [`DEPLOY.md`](./DEPLOY.md) for the full walkthrough. The deployment command 
 3. **Sign up** as first admin at `http://<vps-ip>:3100` and walk through the onboarding wizard:
    - attach a domain (Caddy auto-provisions HTTPS)
    - authenticate Claude Code and/or Codex (OAuth PKCE / device auth)
-   - connect GitHub, create or attach a repo
+   - connect GitHub with a PAT, create or attach a repo
+   - confirm shared organization context
    - configure notifications (Telegram or email)
 4. **Later changes** live in `Settings`:
    - re-authorize Claude Code or Codex
@@ -85,7 +88,6 @@ AIOS-PRD.md               product spec
 onboarding-caddy.md       domain + HTTPS setup recipe
 onboarding-cli-auth.md    Claude Code / Codex auth recipe
 DEPLOY.md                 end-to-end deploy walkthrough
-PLAN.md                   implementation tracker (all phases done)
 README.md                 this file
 ```
 
@@ -95,11 +97,10 @@ README.md                 this file
 - [`DEPLOY.md`](./DEPLOY.md) — deploy walkthrough
 - [`onboarding-caddy.md`](./onboarding-caddy.md) — domain attachment + automatic HTTPS
 - [`onboarding-cli-auth.md`](./onboarding-cli-auth.md) — Claude Code + Codex CLI install and auth
-- [`PLAN.md`](./PLAN.md) — build phase tracker
 
 ## Status
 
-All nine PLAN phases implemented. See [`PLAN.md`](./PLAN.md) for the phase-by-phase breakdown and [`DEPLOY.md`](./DEPLOY.md) for deploying to a fresh VPS.
+The implementation is present under `server/`, `ui/`, and `scripts/`. See [`DEPLOY.md`](./DEPLOY.md) for deploying to a fresh VPS.
 
 ## License
 

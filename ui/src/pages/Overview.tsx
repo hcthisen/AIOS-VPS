@@ -2,11 +2,13 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api";
 import { Section } from "../components/Section";
 import { IconButton } from "../components/IconButton";
+import { Drawer } from "../components/Drawer";
 
 interface OwnerNotification {
   id: number;
   source_scope: string;
   source_path: string;
+  run_id: string | null;
   title: string;
   body: string;
   priority: "info" | "warning" | "critical";
@@ -29,6 +31,7 @@ export function Overview({ navigate }: { navigate: (t: string) => void }) {
   const [notificationPriority, setNotificationPriority] = useState("");
   const [notificationStatus, setNotificationStatus] = useState("");
   const [notificationBusy, setNotificationBusy] = useState<string | null>(null);
+  const [selectedNotification, setSelectedNotification] = useState<OwnerNotification | null>(null);
   const notificationLimit = 50;
 
   const refresh = async () => {
@@ -87,11 +90,24 @@ export function Overview({ navigate }: { navigate: (t: string) => void }) {
     const key = `${action}-${id}`;
     setNotificationBusy(key);
     try {
-      await api(`/api/notifications/${id}/${action}`, { method: "POST" });
+      const result = await api<{ notification?: OwnerNotification }>(`/api/notifications/${id}/${action}`, { method: "POST" });
+      if (result.notification && selectedNotification?.id === id) {
+        setSelectedNotification(result.notification);
+      }
       await reloadNotifications();
     } finally {
       setNotificationBusy(null);
     }
+  };
+
+  const openNotification = async (notification: OwnerNotification) => {
+    setSelectedNotification(notification);
+    if (notification.read_at) return;
+    try {
+      const result = await api<{ notification: OwnerNotification }>(`/api/notifications/${notification.id}/read`, { method: "POST" });
+      setSelectedNotification(result.notification || { ...notification, read_at: Date.now() });
+      await reloadNotifications();
+    } catch {}
   };
 
   const resetNotificationFilters = () => {
@@ -207,13 +223,19 @@ export function Overview({ navigate }: { navigate: (t: string) => void }) {
                 {notifications.notifications.map((notification) => (
                   <tr key={notification.id}>
                     <td>
-                      <div className="col" style={{ gap: 4 }}>
-                        <div className={notification.read_at ? "" : "mono"}>
-                          <b>{notification.title}</b>
+                      <button
+                        className="notification-message-button"
+                        onClick={() => openNotification(notification)}
+                        title="Open notification"
+                      >
+                        <div className="col" style={{ gap: 4 }}>
+                          <div className={notification.read_at ? "" : "mono"}>
+                            <b>{notification.title}</b>
+                          </div>
+                          <div className="small muted">{preview(notification.body)}</div>
+                          {notification.last_error ? <div className="small" style={{ color: "var(--danger)" }}>{notification.last_error}</div> : null}
                         </div>
-                        <div className="small muted">{preview(notification.body)}</div>
-                        {notification.last_error ? <div className="small" style={{ color: "var(--danger)" }}>{notification.last_error}</div> : null}
-                      </div>
+                      </button>
                     </td>
                     <td>{notification.source_scope === "_root" ? "Root" : notification.source_scope}</td>
                     <td><span className={`badge ${priorityClass(notification.priority)}`}>{notification.priority}</span></td>
@@ -263,6 +285,60 @@ export function Overview({ navigate }: { navigate: (t: string) => void }) {
         </div>
       </Section>
 
+      <Drawer
+        open={!!selectedNotification}
+        title={selectedNotification?.title || "Notification"}
+        onClose={() => setSelectedNotification(null)}
+        footer={selectedNotification && (
+          <>
+            <button className="ghost" onClick={() => setSelectedNotification(null)}>Close</button>
+            <IconButton
+              onClick={() => notificationAction(selectedNotification.id, selectedNotification.read_at ? "unread" : "read")}
+              disabled={notificationBusy === `${selectedNotification.read_at ? "unread" : "read"}-${selectedNotification.id}`}
+            >
+              {selectedNotification.read_at ? "Mark unread" : "Mark read"}
+            </IconButton>
+            {(selectedNotification.status === "failed" || selectedNotification.status === "no_channel" || selectedNotification.status === "pending") && (
+              <IconButton
+                onClick={() => notificationAction(selectedNotification.id, "retry")}
+                disabled={notificationBusy === `retry-${selectedNotification.id}`}
+              >
+                Retry
+              </IconButton>
+            )}
+          </>
+        )}
+      >
+        {selectedNotification && (
+          <div className="col">
+            <div className="row">
+              <span className={`badge ${priorityClass(selectedNotification.priority)}`}>{selectedNotification.priority}</span>
+              <span className={`badge ${statusClass(selectedNotification.status)}`}>{formatStatus(selectedNotification.status)}</span>
+              <span className="badge">{selectedNotification.source_scope === "_root" ? "Root" : selectedNotification.source_scope}</span>
+            </div>
+            <div className="small muted">
+              Created {new Date(selectedNotification.created_at).toLocaleString()}
+              {selectedNotification.delivered_at ? ` · delivered ${new Date(selectedNotification.delivered_at).toLocaleString()}` : ""}
+            </div>
+            <pre className="notification-body">{selectedNotification.body}</pre>
+            {parseTags(selectedNotification.tags).length ? (
+              <div className="row" style={{ gap: 6 }}>
+                {parseTags(selectedNotification.tags).map((tag) => <span key={tag} className="badge">{tag}</span>)}
+              </div>
+            ) : null}
+            <div className="small muted">
+              Source: <code>{selectedNotification.source_path}</code>
+              {selectedNotification.run_id ? <> · Run: <a onClick={() => navigate(`/runs/${selectedNotification.run_id}`)}>{selectedNotification.run_id}</a></> : null}
+            </div>
+            {selectedNotification.last_error ? (
+              <div className="banner err">
+                <div className="banner-body">{selectedNotification.last_error}</div>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </Drawer>
+
       <Section title="Running">
         {!data?.runs?.length ? (
           <div className="muted small">Nothing running right now.</div>
@@ -287,6 +363,17 @@ export function Overview({ navigate }: { navigate: (t: string) => void }) {
 function preview(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+}
+
+function parseTags(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.map((tag) => String(tag).trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function priorityClass(priority: OwnerNotification["priority"]): string {

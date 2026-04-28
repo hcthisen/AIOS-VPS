@@ -2,7 +2,7 @@ import { mkdir, writeFile, chmod } from "fs/promises";
 import { join } from "path";
 
 import { adminOnly } from "../auth";
-import { config } from "../config";
+import { config, saveConfig } from "../config";
 import { badRequest, conflict, Router } from "../http";
 import { currentGitHubRepoFullName, ensureGitHubPushWebhook, getGithubCreds, setGithubCreds, verifyPat } from "../services/github";
 import { log } from "../log";
@@ -28,6 +28,7 @@ import {
   saveTelegramAgentConfig,
 } from "../services/telegramAgent";
 import { pollTelegramUpdatesOnce } from "../services/telegramUpdates";
+import { normalizeTimezoneOffsetMinutes, serverTimeSnapshot } from "../services/time";
 
 function githubStatus() {
   const creds = getGithubCreds();
@@ -162,6 +163,24 @@ export function registerSettingsRoutes(router: Router) {
   router.post("/api/settings/telegram-agent/reset", async (req, res) => {
     await guard(req, res);
     res.json({ ok: true, ...resetTelegramAgentSession(), status: await getTelegramAgentStatus() });
+  });
+
+  router.get("/api/settings/time", async (req, res) => {
+    await guard(req, res);
+    res.json(serverTimeSnapshot());
+  });
+
+  router.post("/api/settings/time", async (req, res) => {
+    await guard(req, res);
+    const timezoneOffsetMinutes = normalizeTimezoneOffsetMinutes(req.body?.timezoneOffsetMinutes);
+    saveConfig({
+      ...config,
+      scheduler: {
+        ...config.scheduler,
+        timezoneOffsetMinutes,
+      },
+    });
+    res.json({ ok: true, ...serverTimeSnapshot() });
   });
 
   router.get("/api/settings/system-update/status", async (req, res) => {

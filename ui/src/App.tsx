@@ -19,6 +19,7 @@ import { TerminalPage } from "./pages/Terminal";
 import { ManualRunPage } from "./pages/ManualRun";
 import { RunDetail } from "./pages/RunDetail";
 import { SettingsPage } from "./pages/Settings";
+import { ServerClock } from "./components/ServerClock";
 
 export interface Me {
   user: { id: number; email: string; isAdmin: boolean } | null;
@@ -111,12 +112,16 @@ export function App() {
           {"\u2630"}
         </button>
         <span className="brand">AIOS</span>
+        <ServerClock />
         <span className="spacer" />
         <span className="small muted">{title}</span>
       </header>
       <div className="drawer-scrim" onClick={close} />
       <nav className="sidebar">
-        <h1>AIOS</h1>
+        <div className="sidebar-brand">
+          <h1>AIOS</h1>
+          <ServerClock />
+        </div>
         <a className={path === "/" ? "active" : ""} onClick={() => go("/")}>Overview</a>
         <a className={path.startsWith("/runs") ? "active" : ""} onClick={() => go("/runs")}>Runs</a>
         <a className={path.startsWith("/departments") ? "active" : ""} onClick={() => go("/departments")}>Departments</a>

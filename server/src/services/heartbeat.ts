@@ -10,6 +10,7 @@ import { runSyncLayer } from "./sync";
 import { getSetupPhase } from "../setup-phase";
 import { isSystemUpdateBlocking } from "./systemUpdate";
 import { processOwnerNotificationOutbox, retryPendingOwnerNotifications } from "./ownerNotifications";
+import { schedulerCronOptions } from "./time";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 export const MIN_GOAL_INTERVAL_MS = 10 * 60_000;
@@ -89,7 +90,7 @@ export async function runHeartbeatTick() {
     const lastFired = state?.last_fired ?? 0;
     let next: number;
     try {
-      const it = cronParser.parseExpression(t.schedule, { currentDate: new Date(lastFired || now - 60_000) });
+      const it = cronParser.parseExpression(t.schedule, schedulerCronOptions(new Date(lastFired || now - 60_000)));
       next = it.next().getTime();
     } catch (e: any) {
       log.warn(`invalid cron '${t.schedule}' in ${t.relPath}`);
@@ -120,7 +121,7 @@ export async function runHeartbeatTick() {
     const lastFired = state?.last_fired ?? 0;
     let next: number;
     try {
-      const it = cronParser.parseExpression(g.schedule, { currentDate: new Date(lastFired || now - 60_000) });
+      const it = cronParser.parseExpression(g.schedule, schedulerCronOptions(new Date(lastFired || now - 60_000)));
       next = it.next().getTime();
     } catch (e: any) {
       log.warn(`invalid goal schedule '${g.schedule}' in ${g.relPath}`);
@@ -149,7 +150,7 @@ async function commitOutboxCleanup() {
 
 export function isGoalScheduleAllowed(schedule: string, minIntervalMs = MIN_GOAL_INTERVAL_MS): boolean {
   try {
-    const it = cronParser.parseExpression(schedule, { currentDate: new Date() });
+    const it = cronParser.parseExpression(schedule, schedulerCronOptions(new Date()));
     const first = it.next().getTime();
     const second = it.next().getTime();
     return second - first >= minIntervalMs;

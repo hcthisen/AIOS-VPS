@@ -16,6 +16,9 @@ export interface AiosConfig {
     baseUrlMode: "auto" | "explicit";
     domain: string | null;
   };
+  scheduler: {
+    timezoneOffsetMinutes: number;
+  };
   systemUpdater: {
     repoUrl: string | null;
     branch: string;
@@ -51,7 +54,7 @@ function normalize(input: Partial<AiosConfig>): AiosConfig {
     || process.env.AIOS_LOGS_DIR
     || join(dataDir, "..", "logs");
   return {
-    port: input.port ?? Number(process.env.PORT) ?? 3100,
+    port: normalizePort(input.port ?? process.env.PORT),
     host: input.host ?? (process.env.HOST || "0.0.0.0"),
     dataDir,
     repoDir: input.repoDir
@@ -71,12 +74,31 @@ function normalize(input: Partial<AiosConfig>): AiosConfig {
       baseUrlMode: input.auth?.baseUrlMode ?? "auto",
       domain: input.auth?.domain ?? null,
     },
+    scheduler: {
+      timezoneOffsetMinutes: normalizeTimezoneOffsetMinutes(
+        input.scheduler?.timezoneOffsetMinutes
+          ?? process.env.AIOS_TIMEZONE_OFFSET_MINUTES,
+      ),
+    },
     systemUpdater: {
       repoUrl: input.systemUpdater?.repoUrl ?? DEFAULT_SYSTEM_UPDATER_REPO_URL,
       branch: input.systemUpdater?.branch?.trim() || "main",
       sourceDir: input.systemUpdater?.sourceDir?.trim() || defaultSystemSourceDir,
     },
   };
+}
+
+function normalizePort(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 && n < 65536 ? n : 3100;
+}
+
+function normalizeTimezoneOffsetMinutes(value: unknown): number {
+  const n = Number(value);
+  const fallback = -new Date().getTimezoneOffset();
+  if (!Number.isFinite(n)) return fallback;
+  const rounded = Math.round(n / 60) * 60;
+  return Math.max(-12 * 60, Math.min(14 * 60, rounded));
 }
 
 const configPath = process.env.AIOS_CONFIG
