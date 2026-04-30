@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { api } from "../api";
 import { Banner } from "./Banner";
@@ -27,24 +27,39 @@ export function TelegramAgentPanel() {
   const [status, setStatus] = useState<TelegramAgentStatus | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [provider, setProvider] = useState<Provider>("claude-code");
+  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const dirtyRef = useRef(false);
 
   const providerAuthorized = provider === "codex"
     ? !!status?.providers?.codex?.authorized
     : !!status?.providers?.claudeCode?.authorized;
   const hasAuthorizedProvider = !!status?.providers?.codex?.authorized || !!status?.providers?.claudeCode?.authorized;
 
-  const refresh = async () => {
+  const markDirty = () => {
+    dirtyRef.current = true;
+    setDirty(true);
+  };
+
+  const markClean = () => {
+    dirtyRef.current = false;
+    setDirty(false);
+  };
+
+  const refresh = async (syncForm = false) => {
     const next = await api<TelegramAgentStatus>("/api/settings/telegram-agent/status");
     setStatus(next);
-    setEnabled(next.enabled);
-    setProvider(next.provider);
+    if (syncForm || !dirtyRef.current) {
+      setEnabled(next.enabled);
+      setProvider(next.provider);
+      markClean();
+    }
   };
 
   useEffect(() => {
-    refresh().catch((e: any) => setMessage({ kind: "err", text: e.message }));
+    refresh(true).catch((e: any) => setMessage({ kind: "err", text: e.message }));
     const timer = window.setInterval(() => {
       refresh().catch(() => {});
     }, 5000);
@@ -60,6 +75,9 @@ export function TelegramAgentPanel() {
         body: JSON.stringify({ enabled, provider }),
       });
       setStatus(next);
+      setEnabled(next.enabled);
+      setProvider(next.provider);
+      markClean();
       setMessage({ kind: "ok", text: "Telegram Root Agent settings saved." });
     } catch (e: any) {
       setMessage({ kind: "err", text: e.message });
@@ -78,6 +96,7 @@ export function TelegramAgentPanel() {
       setStatus(result.status);
       setEnabled(result.status.enabled);
       setProvider(result.status.provider);
+      markClean();
       setMessage({ kind: "ok", text: `Session reset. Killed ${result.killed} run(s), canceled ${result.canceled} queued message(s).` });
     } catch (e: any) {
       setMessage({ kind: "err", text: e.message });
@@ -94,14 +113,14 @@ export function TelegramAgentPanel() {
       <div className="grid-2">
         <label className="col">
           <span className="small muted">Status</span>
-          <select value={enabled ? "enabled" : "disabled"} onChange={(e) => setEnabled(e.target.value === "enabled")}>
+          <select value={enabled ? "enabled" : "disabled"} onChange={(e) => { setEnabled(e.target.value === "enabled"); markDirty(); }}>
             <option value="disabled">Disabled</option>
             <option value="enabled">Enabled</option>
           </select>
         </label>
         <label className="col">
           <span className="small muted">Operator</span>
-          <select value={provider} onChange={(e) => setProvider(e.target.value as Provider)}>
+          <select value={provider} onChange={(e) => { setProvider(e.target.value as Provider); markDirty(); }}>
             <option value="claude-code" disabled={!status?.providers?.claudeCode?.authorized}>
               Claude Code{status?.providers?.claudeCode?.authorized ? "" : " (not connected)"}
             </option>
@@ -125,7 +144,7 @@ export function TelegramAgentPanel() {
       </div>
 
       <div className="small muted">
-        Session: <code>{status?.sessionId || "none"}</code>
+        Session: <code>{status && provider !== status.provider ? "none after save" : status?.sessionId || "none"}</code>
       </div>
 
       <div className="row">

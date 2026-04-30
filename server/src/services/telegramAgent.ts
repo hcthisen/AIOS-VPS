@@ -75,7 +75,7 @@ function setTelegramAgentConfig(config: TelegramAgentConfig) {
 }
 
 export async function saveTelegramAgentConfig(input: { enabled?: boolean; provider?: Provider }) {
-  const current = await normalizeTelegramAgentProvider(getTelegramAgentConfig());
+  const current = getTelegramAgentConfig();
   const nextProvider = input.provider || current.provider;
   if (input.provider && !(await isProviderAuthorized(input.provider))) {
     throw new Error(`${displayProvider(input.provider)} is not authorized`);
@@ -96,7 +96,7 @@ export async function saveTelegramAgentConfig(input: { enabled?: boolean; provid
 }
 
 export async function getTelegramAgentStatus() {
-  const config = await normalizeTelegramAgentProvider(getTelegramAgentConfig());
+  const config = getTelegramAgentConfig();
   const notification = getNotificationConfig();
   const pairing = getTelegramPairingState();
   const chatId = notification.channel === "telegram" ? notification.chatId || null : null;
@@ -279,21 +279,6 @@ export async function dispatchTelegramAgentQueue() {
   } finally {
     dispatching = false;
   }
-}
-
-async function normalizeTelegramAgentProvider(config: TelegramAgentConfig): Promise<TelegramAgentConfig> {
-  const providers = await getProviderAvailability();
-  if (providers[config.provider]) return config;
-  const fallback: Provider | null = providers.codex ? "codex" : providers["claude-code"] ? "claude-code" : null;
-  if (!fallback) return config;
-  const next = {
-    ...config,
-    provider: fallback,
-    sessionId: null,
-    resetGeneration: config.resetGeneration + 1,
-  };
-  setTelegramAgentConfig(next);
-  return next;
 }
 
 function queuedMessages(): TelegramAgentMessage[] {

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
-import { db, kvDel } from "../db";
+import { db, kvDel, kvGet, kvSet } from "../db";
 import {
   buildTelegramRootPrompt,
   enqueueTelegramAgentMessage,
@@ -24,6 +24,7 @@ describe("telegramAgent", () => {
     process.env.AIOS_HOME = tempHome;
     db.prepare("DELETE FROM telegram_agent_messages").run();
     kvDel("telegram.rootAgent.config");
+    kvDel("company.1.telegram.rootAgent.config");
   });
 
   afterEach(async () => {
@@ -87,14 +88,61 @@ describe("telegramAgent", () => {
     );
   });
 
-  it("normalizes to the authorized provider in status", async () => {
+  it("keeps the saved provider unchanged when status is read", async () => {
+    await mkdir(join(tempHome, ".claude"), { recursive: true });
+    await writeFile(join(tempHome, ".claude", ".credentials.json"), "{}\n", "utf-8");
+    kvSet("company.1.telegram.rootAgent.config", JSON.stringify({
+      enabled: true,
+      provider: "codex",
+      sessionId: "codex-session",
+      offset: null,
+      resetGeneration: 7,
+      updatedAt: Date.now(),
+    }));
+
+    const status = await getTelegramAgentStatus();
+    const stored = JSON.parse(kvGet("company.1.telegram.rootAgent.config") || "{}");
+
+    assert.equal(status.provider, "codex");
+    assert.equal(status.providerAuthorized, false);
+    assert.equal(status.providers.claudeCode.authorized, true);
+    assert.equal(stored.provider, "codex");
+    assert.equal(stored.sessionId, "codex-session");
+    assert.equal(stored.resetGeneration, 7);
+  });
+
+  it("does not auto-select the only authorized provider in status", async () => {
     await mkdir(join(tempHome, ".codex"), { recursive: true });
     await writeFile(join(tempHome, ".codex", "auth.json"), "{}\n", "utf-8");
 
     const status = await getTelegramAgentStatus();
 
-    assert.equal(status.provider, "codex");
+    assert.equal(status.provider, "claude-code");
+    assert.equal(status.providerAuthorized, false);
     assert.equal(status.providers.codex.authorized, true);
     assert.equal(status.providers.claudeCode.authorized, false);
+  });
+
+  it("clears provider session state when the Telegram agent provider changes", async () => {
+    await mkdir(join(tempHome, ".claude"), { recursive: true });
+    await writeFile(join(tempHome, ".claude", ".credentials.json"), "{}\n", "utf-8");
+    kvSet("company.1.telegram.rootAgent.config", JSON.stringify({
+      enabled: true,
+      provider: "codex",
+      sessionId: "codex-session",
+      offset: null,
+      resetGeneration: 3,
+      updatedAt: Date.now(),
+    }));
+
+    const status = await saveTelegramAgentConfig({ provider: "claude-code" });
+    const stored = JSON.parse(kvGet("company.1.telegram.rootAgent.config") || "{}");
+
+    assert.equal(status.provider, "claude-code");
+    assert.equal(status.sessionId, null);
+    assert.equal(status.resetGeneration, 4);
+    assert.equal(stored.provider, "claude-code");
+    assert.equal(stored.sessionId, null);
+    assert.equal(stored.resetGeneration, 4);
   });
 });
