@@ -80,13 +80,16 @@ export function SettingsPage({ onCompaniesChanged }: { onCompaniesChanged: () =>
 
 function CompaniesSettings({ onChanged }: { onChanged: () => Promise<void> }) {
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [nameEdits, setNameEdits] = useState<Record<string, string>>({});
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const activeSlug = getActiveCompanySlug();
 
   const load = async () => {
     const result = await api<{ companies: Company[] }>("/api/companies");
-    setCompanies(result.companies || []);
+    const rows = result.companies || [];
+    setCompanies(rows);
+    setNameEdits(Object.fromEntries(rows.map((company) => [company.slug, company.displayName])));
   };
 
   useEffect(() => { load().catch((e) => setError(e.message)); }, []);
@@ -110,10 +113,28 @@ function CompaniesSettings({ onChanged }: { onChanged: () => Promise<void> }) {
     }
   };
 
+  const saveName = async (company: Company) => {
+    const displayName = String(nameEdits[company.slug] || "").trim();
+    setBusySlug(company.slug);
+    setError(null);
+    try {
+      await api(`/api/companies/${encodeURIComponent(company.slug)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ displayName }),
+      });
+      await load();
+      await onChanged();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusySlug(null);
+    }
+  };
+
   return (
     <Section
       title="Companies"
-      description="Remove connected companies from this VPS. The GitHub repository remains on GitHub and can be attached again later."
+      description="Rename dashboard labels or remove connected companies from this VPS. The GitHub repository remains on GitHub and can be attached again later."
     >
       <div className="table-wrap">
         <table>
@@ -122,30 +143,52 @@ function CompaniesSettings({ onChanged }: { onChanged: () => Promise<void> }) {
               <th>Company</th>
               <th>Repository</th>
               <th>Status</th>
-              <th />
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {companies.map((company) => (
-              <tr key={company.slug}>
-                <td>
-                  <b>{company.displayName}</b>
-                  {company.slug === activeSlug ? <span className="badge ok" style={{ marginLeft: 8 }}>active</span> : null}
-                </td>
-                <td className="small muted">{company.repoFullName || "not connected"}</td>
-                <td className="small muted">{company.isDefault ? "default" : company.setupPhase}</td>
-                <td style={{ textAlign: "right" }}>
-                  <button
-                    className="icon-btn danger"
-                    onClick={() => removeCompany(company)}
-                    disabled={company.isDefault || busySlug === company.slug}
-                    title={company.isDefault ? "The default company cannot be removed" : "Remove company"}
-                  >
-                    {busySlug === company.slug ? "Removing..." : "Remove"}
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {companies.map((company) => {
+              const editName = nameEdits[company.slug] ?? company.displayName;
+              const isDirty = editName.trim() !== company.displayName;
+              return (
+                <tr key={company.slug}>
+                  <td>
+                    <div className="col" style={{ gap: 6 }}>
+                      <input
+                        value={editName}
+                        onChange={(e) => setNameEdits({ ...nameEdits, [company.slug]: e.target.value })}
+                        aria-label={`${company.displayName} display name`}
+                      />
+                      <div>
+                        <code>{company.slug}</code>
+                        {company.slug === activeSlug ? <span className="badge ok" style={{ marginLeft: 8 }}>active</span> : null}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="small muted">{company.repoFullName || "not connected"}</td>
+                  <td className="small muted">{company.isDefault ? "default" : company.setupPhase}</td>
+                  <td>
+                    <div className="row" style={{ justifyContent: "flex-end" }}>
+                      <button
+                        className="icon-btn"
+                        onClick={() => saveName(company)}
+                        disabled={busySlug === company.slug || !editName.trim() || !isDirty}
+                      >
+                        {busySlug === company.slug ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        className="icon-btn danger"
+                        onClick={() => removeCompany(company)}
+                        disabled={company.isDefault || busySlug === company.slug}
+                        title={company.isDefault ? "The default company cannot be removed" : "Remove company"}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

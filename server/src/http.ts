@@ -46,6 +46,7 @@ export class Router {
   get(p: string, h: Handler)    { this.add("GET", p, h); }
   post(p: string, h: Handler)   { this.add("POST", p, h); }
   put(p: string, h: Handler)    { this.add("PUT", p, h); }
+  patch(p: string, h: Handler)  { this.add("PATCH", p, h); }
   delete(p: string, h: Handler) { this.add("DELETE", p, h); }
 
   async handle(req: AiosRequest, res: AiosResponse): Promise<boolean> {

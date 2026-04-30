@@ -8,6 +8,7 @@ import {
   getCompanyBySlug,
   listCompanies,
   listConnectedRepoFullNames,
+  updateCompanyDisplayName,
   setCompanySetupPhase,
 } from "../services/companies";
 import { activeProcessCount } from "../services/executor";
@@ -114,6 +115,28 @@ export function registerCompanyRoutes(router: Router) {
       removed,
       webhook,
     });
+  });
+
+  router.patch("/api/companies/:slug", async (req, res) => {
+    await guard(req, res);
+    const company = mustCompany(req.params.slug);
+    const displayName = String(req.body?.displayName || "").trim();
+    try {
+      const updated = updateCompanyDisplayName(company.id, displayName);
+      res.json({
+        ok: true,
+        company: {
+          id: updated.id,
+          slug: updated.slug,
+          displayName: updated.displayName,
+          repoFullName: updated.repoFullName,
+          setupPhase: updated.setupPhase,
+          isDefault: updated.isDefault,
+        },
+      });
+    } catch (e: any) {
+      throw badRequest(String(e?.message || e));
+    }
   });
 
   router.get("/api/companies/:slug/context", async (req, res) => {

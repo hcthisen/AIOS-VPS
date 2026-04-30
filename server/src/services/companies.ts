@@ -137,6 +137,24 @@ export function updateDefaultCompanyRepo(fullName: string | null) {
     .run(fullName, Date.now(), company.id);
 }
 
+export function updateDefaultCompanyRepoAndName(fullName: string | null, displayName: string) {
+  const company = getDefaultCompany();
+  updateCompanyDisplayName(company.id, displayName);
+  db.prepare("UPDATE companies SET repo_full_name = ?, updated_at = ? WHERE id = ?")
+    .run(fullName, Date.now(), company.id);
+}
+
+export function updateCompanyDisplayName(companyId: number, displayName: string): Company {
+  const name = String(displayName || "").trim();
+  if (!name) throw new Error("company name required");
+  if (name.length > 80) throw new Error("company name must be 80 characters or fewer");
+  db.prepare("UPDATE companies SET display_name = ?, updated_at = ? WHERE id = ?")
+    .run(name, Date.now(), companyId);
+  const company = getCompanyById(companyId);
+  if (!company) throw new Error("company not found");
+  return company;
+}
+
 export function setCompanySetupPhase(companyId: number, phase: CompanySetupPhase) {
   db.prepare("UPDATE companies SET setup_phase = ?, updated_at = ? WHERE id = ?")
     .run(phase, Date.now(), companyId);
