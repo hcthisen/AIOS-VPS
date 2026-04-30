@@ -69,6 +69,36 @@ describe("telegramUpdates", () => {
     assert.deepEqual(calls, []);
   });
 
+  it("background-polls incomplete companies with enabled paired Telegram agents", async () => {
+    assert.ok(company);
+    const calls: string[] = [];
+    globalThis.fetch = mockAgentTelegramFetch(calls);
+
+    await withCompanyContext(company, () => {
+      setNotificationConfig({ channel: "telegram", botToken: "agent:token", chatId: "42" });
+      kvSet(`company.${company!.id}.telegram.rootAgent.config`, JSON.stringify({
+        enabled: true,
+        provider: "codex",
+        sessionId: null,
+        offset: null,
+        resetGeneration: 0,
+        updatedAt: Date.now(),
+      }));
+    });
+
+    const result = await pollTelegramUpdatesOnce({ timeout: 0, skipIfBusy: false });
+
+    const row = db.prepare(`
+      SELECT text, status FROM telegram_agent_messages
+      WHERE company_id = ? AND update_id = 30
+    `).get(company.id) as { text: string; status: string } | undefined;
+
+    assert.equal(result.polled, true);
+    assert.deepEqual(calls, ["agent:token:getMe", "agent:token:getUpdates"]);
+    assert.equal(row?.text, "run root");
+    assert.equal(row?.status, "queued");
+  });
+
   it("continues background polling when one company's Telegram API fails", async () => {
     const failCompany = insertCompany("telegram-fail-company", "A Telegram Fail", "complete");
     const okCompany = insertCompany("telegram-ok-company", "B Telegram OK", "complete");

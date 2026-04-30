@@ -7,7 +7,7 @@ import {
   telegramApi,
   TelegramUpdate,
 } from "./notifications";
-import { processTelegramAgentUpdates } from "./telegramAgent";
+import { isTelegramAgentConfiguredForCurrentCompany, processTelegramAgentUpdates } from "./telegramAgent";
 import { listCompanies } from "./companies";
 import { getCurrentCompanyId, withCompanyContext } from "../company-context";
 
@@ -44,9 +44,10 @@ async function pollLoop() {
 export async function pollTelegramUpdatesOnce(opts: { timeout?: number; skipIfBusy?: boolean } = {}): Promise<{ polled: boolean; failed: number }> {
   let polled = false;
   let failed = 0;
-  for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
+  for (const company of listCompanies()) {
     try {
       await withCompanyContext(company, async () => {
+        if (company.setupPhase !== "complete" && !isTelegramAgentConfiguredForCurrentCompany()) return;
         const result = await pollCurrentCompanyTelegramUpdatesOnce(opts);
         polled = polled || result.polled;
       });

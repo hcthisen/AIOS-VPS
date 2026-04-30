@@ -123,6 +123,12 @@ export async function getTelegramAgentStatus() {
   };
 }
 
+export function isTelegramAgentConfiguredForCurrentCompany(): boolean {
+  const config = getTelegramAgentConfig();
+  const notification = getNotificationConfig();
+  return !!config.enabled && notification.channel === "telegram" && !!notification.botToken && !!notification.chatId;
+}
+
 export function resetTelegramAgentSession(): { killed: number; canceled: number; sessionId: null } {
   const current = getTelegramAgentConfig();
   const runIds = activeTelegramRunIds();
@@ -173,7 +179,7 @@ export function buildTelegramRootPrompt(messages: TelegramAgentMessage[]): strin
 
 export function startTelegramAgent() {
   if (pollTimer) return;
-  for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
+  for (const company of listCompanies()) {
     withCompanyContext(company, () => recoverInterruptedMessages());
   }
   scheduleDispatch(500);
@@ -193,7 +199,7 @@ function scheduleDispatch(delayMs: number) {
 
 function dispatchLoop() {
   try {
-    for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
+    for (const company of listCompanies()) {
       const dispatch = withCompanyContext(company, () => dispatchTelegramAgentQueue());
       void dispatch.catch((e: any) => {
         log.warn(`telegram root agent dispatch failed for ${company.slug}`, e?.message || e);

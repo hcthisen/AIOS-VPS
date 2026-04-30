@@ -11,6 +11,7 @@ import {
   dispatchTelegramAgentQueue,
   enqueueTelegramAgentMessage,
   getTelegramAgentStatus,
+  isTelegramAgentConfiguredForCurrentCompany,
   resetTelegramAgentSession,
   saveTelegramAgentConfig,
   TelegramAgentMessage,
@@ -184,6 +185,27 @@ describe("telegramAgent", () => {
     } finally {
       globalThis.fetch = originalFetch;
       cleanupCompany("telegram-agent-stale-claim");
+    }
+  });
+
+  it("identifies enabled paired Telegram agents as runnable even before company setup is complete", () => {
+    const company = insertCompany("telegram-agent-incomplete", "Telegram Agent Incomplete");
+    try {
+      withCompanyContext(company, () => {
+        setNotificationConfig({ channel: "telegram", botToken: "123:test", chatId: "42" });
+        kvSet(`company.${company.id}.telegram.rootAgent.config`, JSON.stringify({
+          enabled: true,
+          provider: "codex",
+          sessionId: null,
+          offset: null,
+          resetGeneration: 0,
+          updatedAt: Date.now(),
+        }));
+
+        assert.equal(isTelegramAgentConfiguredForCurrentCompany(), true);
+      });
+    } finally {
+      cleanupCompany("telegram-agent-incomplete");
     }
   });
 });
