@@ -1,6 +1,7 @@
 import { createTransport, Transporter } from "nodemailer";
 import { kvGet, kvSet } from "../db";
 import { log } from "../log";
+import { getCurrentCompanyId } from "../company-context";
 
 export type NotificationConfig =
   | { channel: "telegram"; botToken: string; chatId?: string | null }
@@ -29,12 +30,16 @@ export interface TelegramPairingState {
 const KEY = "notifications.config";
 const TELEGRAM_PAIRING_KEY = "notifications.telegram.pairing";
 
+function scopedKey(key: string): string {
+  return `company.${getCurrentCompanyId()}.${key}`;
+}
+
 export function setNotificationConfig(c: NotificationConfig) {
-  kvSet(KEY, JSON.stringify(c));
+  kvSet(scopedKey(KEY), JSON.stringify(c));
 }
 
 export function getNotificationConfig(): NotificationConfig {
-  const raw = kvGet(KEY);
+  const raw = kvGet(scopedKey(KEY)) || (getCurrentCompanyId() === 1 ? kvGet(KEY) : null);
   if (!raw) return { channel: "none" };
   try {
     return JSON.parse(raw);
@@ -44,11 +49,11 @@ export function getNotificationConfig(): NotificationConfig {
 }
 
 export function setTelegramPairingState(state: TelegramPairingState) {
-  kvSet(TELEGRAM_PAIRING_KEY, JSON.stringify(state));
+  kvSet(scopedKey(TELEGRAM_PAIRING_KEY), JSON.stringify(state));
 }
 
 export function getTelegramPairingState(): TelegramPairingState | null {
-  const raw = kvGet(TELEGRAM_PAIRING_KEY);
+  const raw = kvGet(scopedKey(TELEGRAM_PAIRING_KEY)) || (getCurrentCompanyId() === 1 ? kvGet(TELEGRAM_PAIRING_KEY) : null);
   if (!raw) return null;
   try {
     return JSON.parse(raw);

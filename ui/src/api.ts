@@ -1,8 +1,15 @@
 // Thin fetch wrapper. Talks to /api/*; attaches CSRF header for unsafe methods.
 
 let csrfToken: string | null = null;
+let activeCompanySlug: string | null = localStorage.getItem("aios.activeCompanySlug");
 export function setCsrf(t: string | null) { csrfToken = t; }
 export function getCsrf() { return csrfToken; }
+export function setActiveCompanySlug(slug: string | null) {
+  activeCompanySlug = slug;
+  if (slug) localStorage.setItem("aios.activeCompanySlug", slug);
+  else localStorage.removeItem("aios.activeCompanySlug");
+}
+export function getActiveCompanySlug() { return activeCompanySlug; }
 
 export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method || "GET").toUpperCase();
@@ -12,6 +19,9 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
   }
   if (method !== "GET" && method !== "HEAD" && csrfToken) {
     headers.set("x-csrf", csrfToken);
+  }
+  if (activeCompanySlug && path.startsWith("/api/") && !path.startsWith("/api/companies") && !headers.has("x-aios-company-slug")) {
+    headers.set("x-aios-company-slug", activeCompanySlug);
   }
   const res = await fetch(path, { ...init, headers, credentials: "include" });
   if (!res.ok) {
@@ -26,6 +36,7 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
 
 export function apiStream(path: string, handlers: { onEvent: (event: string, data: any) => void; onError?: (e: any) => void; }) {
   const url = new URL(path, window.location.origin);
+  if (activeCompanySlug && path.startsWith("/api/")) url.searchParams.set("company", activeCompanySlug);
   const es = new EventSource(url.toString(), { withCredentials: true } as any);
   const raw = es as any;
   // EventSource gives us .addEventListener for named events.

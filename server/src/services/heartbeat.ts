@@ -11,6 +11,8 @@ import { getSetupPhase } from "../setup-phase";
 import { isSystemUpdateBlocking } from "./systemUpdate";
 import { processOwnerNotificationOutbox, retryPendingOwnerNotifications } from "./ownerNotifications";
 import { schedulerCronOptions } from "./time";
+import { getCurrentCompanyId, withCompanyContext } from "../company-context";
+import { listCompanies } from "./companies";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 export const MIN_GOAL_INTERVAL_MS = 10 * 60_000;
@@ -27,7 +29,7 @@ export function startHeartbeat(intervalMs = DEFAULT_INTERVAL_MS) {
     if (running) return;
     running = true;
     try {
-      await runHeartbeatTick();
+      await runAllCompaniesHeartbeatTick();
       lastTickError = null;
     } catch (e: any) {
       lastTickError = String(e?.message || e);
@@ -86,7 +88,7 @@ export async function runHeartbeatTick() {
   const tasks = await listCronTasks();
   for (const t of tasks) {
     if (t.paused) continue;
-    const state = db.prepare("SELECT * FROM cron_state WHERE path = ?").get(t.path) as { last_fired: number; paused: number } | undefined;
+    const state = db.prepare("SELECT * FROM cron_state WHERE company_id = ? AND path = ?").get(getCurrentCompanyId(), t.path) as { last_fired: number; paused: number } | undefined;
     const lastFired = state?.last_fired ?? 0;
     let next: number;
     try {
@@ -97,8 +99,8 @@ export async function runHeartbeatTick() {
       continue;
     }
     if (next <= now) {
-      db.prepare(`INSERT INTO cron_state(path, last_fired, paused) VALUES(?, ?, 0)
-                  ON CONFLICT(path) DO UPDATE SET last_fired=excluded.last_fired`).run(t.path, now);
+      db.prepare(`INSERT INTO cron_state(company_id, path, last_fired, paused) VALUES(?, ?, ?, 0)
+                  ON CONFLICT(path) DO UPDATE SET company_id=excluded.company_id, last_fired=excluded.last_fired`).run(getCurrentCompanyId(), t.path, now);
       await startRun({
         departments: [t.department],
         trigger: `cron:${t.relPath}`,
@@ -117,7 +119,7 @@ export async function runHeartbeatTick() {
       log.warn(`goal schedule '${g.schedule}' in ${g.relPath} is below the 10 minute minimum; skipping`);
       continue;
     }
-    const state = db.prepare("SELECT * FROM goal_state WHERE path = ?").get(g.path) as { last_fired: number } | undefined;
+    const state = db.prepare("SELECT * FROM goal_state WHERE company_id = ? AND path = ?").get(getCurrentCompanyId(), g.path) as { last_fired: number } | undefined;
     const lastFired = state?.last_fired ?? 0;
     let next: number;
     try {
@@ -129,13 +131,21 @@ export async function runHeartbeatTick() {
     }
     if (next > now) continue;
 
-    db.prepare(`INSERT INTO goal_state(path, last_fired) VALUES(?, ?)
-                ON CONFLICT(path) DO UPDATE SET last_fired=excluded.last_fired`).run(g.path, now);
+    db.prepare(`INSERT INTO goal_state(company_id, path, last_fired) VALUES(?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET company_id=excluded.company_id, last_fired=excluded.last_fired`).run(getCurrentCompanyId(), g.path, now);
     await startRun({
       departments: [g.department],
       trigger: `goal:${g.relPath}`,
       prompt: buildGoalWakePrompt(g),
       provider: (g.provider as any) || undefined,
+    });
+  }
+}
+
+export async function runAllCompaniesHeartbeatTick() {
+  for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
+    await withCompanyContext(company, async () => {
+      await runHeartbeatTick();
     });
   }
 }

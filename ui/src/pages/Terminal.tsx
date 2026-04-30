@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import "xterm/css/xterm.css";
+import { getActiveCompanySlug } from "../api";
 
 export function TerminalPage() {
   const ref = useRef<HTMLDivElement>(null);
@@ -14,7 +15,9 @@ export function TerminalPage() {
     fit.fit();
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/terminal`);
+    const company = getActiveCompanySlug();
+    const qs = company ? `?company=${encodeURIComponent(company)}` : "";
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/terminal${qs}`);
     ws.onmessage = (e) => { try { const p = JSON.parse(e.data); if (p.t === "data") term.write(p.d); } catch {} };
     term.onData((d) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "data", d })));
     term.onResize(({ cols, rows }) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "resize", cols, rows })));

@@ -40,6 +40,8 @@ Visit `http://<vps-ip>:3100`. The page prompts you to create the first admin. Af
 
 When using a PAT, AIOS automatically creates or updates a GitHub `push` webhook for the connected repo. The webhook points to `/github/webhook` on the configured dashboard URL and uses an AIOS-managed HMAC secret. If the webhook cannot be created because the PAT lacks repo admin/webhook permission, AIOS still falls back to polling GitHub every 60 seconds.
 
+The first repo becomes the default company. After onboarding, use the sidebar company switcher to add more companies from the same GitHub account. Adding a company reuses the existing GitHub PAT and only asks for a repo, company context, and that company's Telegram/email notification connection. Repos already connected to another company are hidden from the picker.
+
 After onboarding, `Settings` can be used to:
 - re-authorize Claude Code or Codex
 - reconnect GitHub with a PAT or deploy key
@@ -82,4 +84,4 @@ sudo scripts/backup-restore.sh backup  /root/aios-$(date +%F).tar.gz
 sudo scripts/backup-restore.sh restore /root/aios-2024-01-01.tar.gz
 ```
 
-Backs up the repo clone, the sqlite state directory, both provider credential trees, the Caddyfile, and the systemd unit.
+Backs up the repo clone/worktrees, the sqlite state directory, both provider credential trees, the Caddyfile, and the systemd unit.

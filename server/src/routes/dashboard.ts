@@ -10,6 +10,7 @@ import matter from "gray-matter";
 import { Router, badRequest, conflict, notFound, AiosRequest } from "../http";
 import { adminOnly } from "../auth";
 import { config } from "../config";
+import { getCurrentCompanyId, withCompanyContext } from "../company-context";
 import {
   createDepartment,
   DepartmentCreateError,
@@ -33,6 +34,7 @@ import {
   markOwnerNotificationRead,
 } from "../services/ownerNotifications";
 import { commitRepoSnapshot, getGitSyncStatus, isGitWorktreeBlocked, syncRepoWithRemote } from "../services/repo";
+import { getCompanyBySlug } from "../services/companies";
 
 export function registerDashboardRoutes(router: Router) {
   const guard = adminOnly();
@@ -305,14 +307,25 @@ export function registerDashboardRoutes(router: Router) {
   // Admin view of deliveries.
   router.get("/api/webhooks/deliveries", async (req, res) => {
     await guard(req, res);
-    const rows = db.prepare("SELECT * FROM webhook_deliveries ORDER BY received_at DESC LIMIT 200").all();
+    const rows = db.prepare("SELECT * FROM webhook_deliveries WHERE company_id = ? ORDER BY received_at DESC LIMIT 200").all(getCurrentCompanyId());
     res.json({ deliveries: rows });
   });
 
-  // Public intake: /webhooks/:department/:name (no auth — validated by a per-dept secret).
+  // Public intake: legacy /webhooks/:department/:name and scoped
+  // /webhooks/:companySlug/:department/:name.
   router.post("/webhooks/:department/:name", async (req, res) => {
-    const dept = req.params.department;
-    const name = req.params.name;
+    await handlePublicWebhook(req, res, req.params.department, req.params.name);
+  });
+
+  router.post("/webhooks/:companySlug/:department/:name", async (req, res) => {
+    const company = getCompanyBySlug(req.params.companySlug);
+    if (!company) throw notFound("company not found");
+    await withCompanyContext(company, async () => {
+      await handlePublicWebhook(req, res, req.params.department, req.params.name);
+    });
+  });
+
+  async function handlePublicWebhook(req: AiosRequest, res: any, dept: string, name: string) {
     const endpoint = `${dept}/${name}`;
     const payload = req.body || {};
     const source = describeWebhookSource(req);
@@ -353,7 +366,7 @@ export function registerDashboardRoutes(router: Router) {
     const r = await startRun({ departments: [dept], trigger: `webhook:${endpoint}`, prompt });
     recordDelivery({ department: dept, endpoint, source, payload, outcome: r.accepted ? `run:${r.run.id}` : "queued" });
     res.json({ ok: true, runId: r.run.id, accepted: r.accepted });
-  });
+  }
 
   // ---------- Owner notifications ----------
   router.get("/api/notifications", async (req, res) => {
@@ -445,18 +458,19 @@ export function registerDashboardRoutes(router: Router) {
              COALESCE(SUM(tokens_out), 0) as tokens_out,
              COALESCE(SUM(cost_usd), 0)   as cost_usd,
              COUNT(*) as runs
-      FROM usage GROUP BY department
-    `).all();
+      FROM usage WHERE company_id = ? GROUP BY department
+    `).all(getCurrentCompanyId());
     const byDay = db.prepare(`
       SELECT DATE(recorded_at/1000, 'unixepoch') as day,
              COALESCE(SUM(tokens_in), 0)  as tokens_in,
              COALESCE(SUM(tokens_out), 0) as tokens_out,
              COALESCE(SUM(cost_usd), 0)   as cost_usd
       FROM usage
+      WHERE company_id = ?
       GROUP BY day
       ORDER BY day DESC
       LIMIT 30
-    `).all();
+    `).all(getCurrentCompanyId());
     res.json({ byDept, byDay });
   });
 
@@ -506,7 +520,7 @@ export async function deleteCronTaskFile(relPath: string) {
   const task = tasks.find((x) => x.relPath === relPath);
   if (!task) throw notFound("task not found");
   await unlink(task.path);
-  db.prepare("DELETE FROM cron_state WHERE path = ?").run(task.path);
+  db.prepare("DELETE FROM cron_state WHERE company_id = ? AND path = ?").run(getCurrentCompanyId(), task.path);
   return task;
 }
 
@@ -515,7 +529,7 @@ export async function deleteGoalFile(relPath: string) {
   const goal = goals.find((x) => x.relPath === relPath);
   if (!goal) throw notFound("goal not found");
   await unlink(goal.path);
-  db.prepare("DELETE FROM goal_state WHERE path = ?").run(goal.path);
+  db.prepare("DELETE FROM goal_state WHERE company_id = ? AND path = ?").run(getCurrentCompanyId(), goal.path);
   return goal;
 }
 
@@ -536,9 +550,9 @@ export async function validateProviderFrontmatter(relPath: string, content: stri
 }
 
 function recordDelivery(d: { department: string; endpoint: string; source?: string | null; payload: unknown; outcome: string }) {
-  db.prepare(`INSERT INTO webhook_deliveries(department, endpoint, source, payload, outcome, received_at)
-              VALUES(?, ?, ?, ?, ?, ?)`)
-    .run(d.department, d.endpoint, d.source || null, JSON.stringify(d.payload).slice(0, 8000), d.outcome, Date.now());
+  db.prepare(`INSERT INTO webhook_deliveries(company_id, department, endpoint, source, payload, outcome, received_at)
+              VALUES(?, ?, ?, ?, ?, ?, ?)`)
+    .run(getCurrentCompanyId(), d.department, d.endpoint, d.source || null, JSON.stringify(d.payload).slice(0, 8000), d.outcome, Date.now());
 }
 
 function matchesSecret(expected: string, actual: string): boolean {
@@ -570,7 +584,7 @@ function firstPromptLine(prompt: string): string {
 
 async function listWebhookHandlers() {
   const depts = await listDepartments();
-  const recent = db.prepare("SELECT endpoint, outcome, received_at FROM webhook_deliveries ORDER BY received_at DESC LIMIT 1000").all() as Array<{
+  const recent = db.prepare("SELECT endpoint, outcome, received_at FROM webhook_deliveries WHERE company_id = ? ORDER BY received_at DESC LIMIT 1000").all(getCurrentCompanyId()) as Array<{
     endpoint: string;
     outcome: string;
     received_at: number;

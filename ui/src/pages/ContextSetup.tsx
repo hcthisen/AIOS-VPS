@@ -21,13 +21,21 @@ const emptyForm: ContextForm = {
   sharedConventions: "",
 };
 
-export function ContextSetup({ onAdvance }: { onAdvance: () => Promise<void> }) {
+export function ContextSetup({
+  onAdvance,
+  basePath = "/api/onboarding/context",
+  savePath = "/api/onboarding/context/save",
+}: {
+  onAdvance: () => Promise<void>;
+  basePath?: string;
+  savePath?: string;
+}) {
   const [form, setForm] = useState<ContextForm>(emptyForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<ContextForm>("/api/onboarding/context")
+    api<ContextForm>(basePath)
       .then(setForm)
       .catch((e) => setError(e.message));
   }, []);
@@ -36,7 +44,7 @@ export function ContextSetup({ onAdvance }: { onAdvance: () => Promise<void> }) 
     setBusy(true);
     setError(null);
     try {
-      await api("/api/onboarding/context/save", {
+      await api(savePath, {
         method: "POST",
         body: JSON.stringify(form),
       });

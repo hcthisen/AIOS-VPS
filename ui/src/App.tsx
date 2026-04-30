@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api, setCsrf } from "./api";
+import { api, getActiveCompanySlug, setActiveCompanySlug, setCsrf } from "./api";
 import { useRoute } from "./router";
 import { AuthPage } from "./pages/Auth";
 import { VpsDomainSetup } from "./pages/VpsDomainSetup";
@@ -20,6 +20,7 @@ import { ManualRunPage } from "./pages/ManualRun";
 import { RunDetail } from "./pages/RunDetail";
 import { SettingsPage } from "./pages/Settings";
 import { ServerClock } from "./components/ServerClock";
+import { AddCompanyPage } from "./pages/AddCompany";
 
 export interface Me {
   user: { id: number; email: string; isAdmin: boolean } | null;
@@ -28,10 +29,21 @@ export interface Me {
   firstRun?: boolean;
 }
 
+interface Company {
+  id: number;
+  slug: string;
+  displayName: string;
+  repoFullName: string | null;
+  setupPhase: string;
+  isDefault: boolean;
+}
+
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [path, navigate] = useRoute();
   const [systemUpdate, setSystemUpdate] = useState<any>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [activeCompany, setActiveCompany] = useState<Company | null>(null);
 
   const refresh = async () => {
     const m = await api<Me>("/api/auth/me");
@@ -41,6 +53,24 @@ export function App() {
   };
 
   useEffect(() => { refresh().catch(() => setMe({ user: null, setupPhase: "admin_setup" })); }, []);
+
+  const refreshCompanies = async () => {
+    const result = await api<{ companies: Company[] }>("/api/companies");
+    const rows = result.companies || [];
+    setCompanies(rows);
+    const stored = getActiveCompanySlug();
+    const next = rows.find((company) => company.slug === stored)
+      || rows.find((company) => company.isDefault)
+      || rows[0]
+      || null;
+    setActiveCompany(next);
+    setActiveCompanySlug(next?.slug || null);
+  };
+
+  useEffect(() => {
+    if (!me?.user || me.setupPhase !== "complete") return;
+    refreshCompanies().catch(() => {});
+  }, [me?.user?.id, me?.setupPhase]);
 
   useEffect(() => {
     if (!me) return;
@@ -97,9 +127,20 @@ export function App() {
     return <SetupLayout me={me} onAdvance={refresh} navigate={navigate} path={path} />;
   }
 
+  if (me.setupPhase === "complete" && !activeCompany) {
+    return <div className="auth-wrap"><div>Loading...</div></div>;
+  }
+
   const close = () => document.body.classList.remove("nav-open");
   const go = (t: string) => { close(); navigate(t); };
   const title = titleFor(path);
+  const selectCompany = (slug: string) => {
+    const next = companies.find((company) => company.slug === slug) || null;
+    setActiveCompany(next);
+    setActiveCompanySlug(next?.slug || null);
+    close();
+    navigate("/");
+  };
 
   return (
     <div className="layout">
@@ -111,7 +152,7 @@ export function App() {
         >
           {"\u2630"}
         </button>
-        <span className="brand">AIOS</span>
+        <span className="brand">{activeCompany?.displayName || "AIOS"}</span>
         <ServerClock />
         <span className="spacer" />
         <span className="small muted">{title}</span>
@@ -119,9 +160,19 @@ export function App() {
       <div className="drawer-scrim" onClick={close} />
       <nav className="sidebar">
         <div className="sidebar-brand">
-          <h1>AIOS</h1>
+          <h1>{activeCompany?.displayName || "AIOS"}</h1>
           <ServerClock />
         </div>
+        {companies.length > 0 && (
+          <div className="company-switcher">
+            <select value={activeCompany?.slug || ""} onChange={(e) => selectCompany(e.target.value)}>
+              {companies.map((company) => (
+                <option key={company.slug} value={company.slug}>{company.displayName}</option>
+              ))}
+            </select>
+            <a className={path === "/companies/new" ? "active" : ""} onClick={() => go("/companies/new")}>Add company</a>
+          </div>
+        )}
         <a className={path === "/" ? "active" : ""} onClick={() => go("/")}>Overview</a>
         <a className={path.startsWith("/runs") ? "active" : ""} onClick={() => go("/runs")}>Runs</a>
         <a className={path.startsWith("/departments") ? "active" : ""} onClick={() => go("/departments")}>Departments</a>
@@ -139,7 +190,7 @@ export function App() {
         <a onClick={async () => { close(); await api("/api/auth/logout", { method: "POST" }); refresh(); navigate("/auth"); }}>Log out</a>
       </nav>
       <main className="main">
-        <Page path={path} navigate={navigate} me={me} refresh={refresh} />
+        <Page key={activeCompany?.slug || "default"} path={path} navigate={navigate} me={me} refresh={refresh} refreshCompanies={refreshCompanies} />
       </main>
     </div>
   );
@@ -147,6 +198,7 @@ export function App() {
 
 function titleFor(path: string): string {
   if (path === "/") return "Overview";
+  if (path === "/companies/new") return "Add company";
   if (path.startsWith("/runs")) return "Runs";
   if (path.startsWith("/departments")) return "Departments";
   if (path === "/manual") return "Manual run";
@@ -201,8 +253,9 @@ function SetupLayout({ me, onAdvance, navigate, path }: { me: Me; onAdvance: () 
   );
 }
 
-function Page({ path, navigate, me, refresh }: { path: string; navigate: (t: string) => void; me: Me; refresh: () => Promise<Me> }) {
+function Page({ path, navigate, me, refresh, refreshCompanies }: { path: string; navigate: (t: string) => void; me: Me; refresh: () => Promise<Me>; refreshCompanies: () => Promise<void> }) {
   if (path === "/") return <Overview navigate={navigate} />;
+  if (path === "/companies/new") return <AddCompanyPage navigate={navigate} onChanged={refreshCompanies} />;
   if (path === "/runs") return <RunsPage navigate={navigate} />;
   if (path.startsWith("/runs/")) return <RunDetail id={path.split("/")[2]} navigate={navigate} />;
   if (path === "/departments") return <DepartmentsPage navigate={navigate} />;

@@ -1,5 +1,6 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { getCurrentCompanyContext } from "./company-context";
 
 export interface AiosConfig {
   port: number;
@@ -53,13 +54,14 @@ function normalize(input: Partial<AiosConfig>): AiosConfig {
   const logsDir = input.logsDir
     || process.env.AIOS_LOGS_DIR
     || join(dataDir, "..", "logs");
-  return {
+  let repoDir = input.repoDir
+    || process.env.AIOS_REPO_DIR
+    || join(defaultHome, "repo");
+  const out = {
     port: normalizePort(input.port ?? process.env.PORT),
     host: input.host ?? (process.env.HOST || "0.0.0.0"),
     dataDir,
-    repoDir: input.repoDir
-      || process.env.AIOS_REPO_DIR
-      || join(defaultHome, "repo"),
+    repoDir,
     logsDir,
     uiDir: input.uiDir
       || process.env.AIOS_UI_DIR
@@ -86,6 +88,17 @@ function normalize(input: Partial<AiosConfig>): AiosConfig {
       sourceDir: input.systemUpdater?.sourceDir?.trim() || defaultSystemSourceDir,
     },
   };
+  Object.defineProperty(out, "repoDir", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      return getCurrentCompanyContext()?.repoDir || repoDir;
+    },
+    set(next: string) {
+      repoDir = next;
+    },
+  });
+  return out;
 }
 
 function normalizePort(value: unknown): number {

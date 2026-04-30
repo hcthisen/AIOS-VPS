@@ -29,6 +29,8 @@ import {
 } from "../services/telegramAgent";
 import { pollTelegramUpdatesOnce } from "../services/telegramUpdates";
 import { normalizeTimezoneOffsetMinutes, serverTimeSnapshot } from "../services/time";
+import { listCompanies } from "../services/companies";
+import { withCompanyContext } from "../company-context";
 
 function githubStatus() {
   const creds = getGithubCreds();
@@ -74,10 +76,18 @@ async function saveGithubConnection(body: any) {
     const verified = await verifyPat(token);
     if (!verified.ok) throw badRequest(`github verify failed: ${verified.error}`);
     setGithubCreds({ mode: "pat", username: verified.login, token });
-    const fullName = await currentGitHubRepoFullName();
-    const webhook = fullName ? await ensureGitHubPushWebhook(token, fullName) : null;
-    if (webhook && !webhook.ok) log.warn(`github webhook setup failed for ${fullName}: ${webhook.error}`);
-    return { ok: true, mode, login: verified.login, webhook };
+    const webhooks: any[] = [];
+    for (const company of listCompanies()) {
+      const fullName = company.repoFullName || await withCompanyContext(company, () => currentGitHubRepoFullName(company.repoDir));
+      if (!fullName) continue;
+      const webhook = await withCompanyContext(company, () => ensureGitHubPushWebhook(token, fullName, {
+        path: `/github/webhook/${company.slug}`,
+        secret: company.webhookSecret,
+      }));
+      webhooks.push({ company: company.slug, fullName, webhook });
+      if (webhook && !webhook.ok) log.warn(`github webhook setup failed for ${fullName}: ${webhook.error}`);
+    }
+    return { ok: true, mode, login: verified.login, webhooks };
   }
 
   if (mode !== "deploy_key") throw badRequest("unsupported github mode");
@@ -127,7 +137,7 @@ async function saveNotifications(body: any) {
 
 async function respondSystemUpdateStatus(res: any, opts: { forceCheck?: boolean; refreshIfStale?: boolean } = {}) {
   const snapshot = await getSystemUpdateSnapshot(opts);
-  const active = activeProcessCount();
+  const active = activeProcessCount("all");
   res.json({
     ...snapshot,
     activeProcesses: active,
@@ -209,7 +219,7 @@ export function registerSettingsRoutes(router: Router) {
 
   router.post("/api/settings/system-update/start", async (req, res) => {
     await guard(req, res);
-    if (activeProcessCount() > 0) throw conflict("wait for active runs to finish before updating");
+    if (activeProcessCount("all") > 0) throw conflict("wait for active runs to finish before updating");
     try {
       await startSystemUpdate(req.actor?.email || "admin");
     } catch (e: any) {

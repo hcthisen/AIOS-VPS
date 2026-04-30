@@ -1,10 +1,11 @@
 # AIOS — A repository-driven autonomous operating system for solo operators
 
-Self-hosted platform that turns a single GitHub monorepo into an autonomous OS. Claude Code or Codex agents run on schedules, webhooks, or manual triggers across "departments" (top-level folders). All state and behaviour live in the repo; the dashboard is a visual interface, not a state holder.
+Self-hosted platform that turns GitHub monorepos into autonomous operating workspaces. One VPS can manage multiple company repos from the same GitHub account; Claude Code or Codex agents run on schedules, webhooks, or manual triggers across "departments" (top-level folders). All company work state and behaviour live in each repo; the dashboard is a visual interface, not a state holder.
 
 ## What is AIOS
 
 - **Repo is the product.** Every task, goal, skill, and env var is a file in the monorepo.
+- **Companies are repo-backed.** Each company maps to one GitHub repo/worktree with separate runs, claims, notifications, webhooks, and Telegram/email configuration.
 - **Dashboard is a view.** It renders what's in the repo and lets you edit it; the repo remains source of truth.
 - **Agents are stateless and interchangeable.** The same folder can run against Claude Code or Codex without code changes.
 - **Concurrency via claims.** One department runs at a time; multiple departments run in parallel.
@@ -14,6 +15,7 @@ See [`AIOS-PRD.md`](./AIOS-PRD.md) for the full product specification.
 ## Features
 
 - Scheduled (cron), webhook, and manual triggers
+- Multi-company dashboard with a sidebar company switcher and an add-company wizard
 - Root and department execution scopes (`CLAUDE.md` / `AGENTS.md`, `cron/`, `goals/`, `skills/`, `.env`, `webhooks/`, `outbox/`, `logs/`)
 - Per-folder claims with backlog queue
 - Two-way GitHub sync (pull before run, commit + push after)
@@ -47,7 +49,7 @@ Internet ──▶ Caddy (80/443) ──▶ aios server (:3100)
                          ▼           ▼            ▼
                  heartbeat scanner  exec engine  dashboard API
                          │           │
-                         └─── reads/writes ───▶ /home/aios/repo ──▶ GitHub
+                         └─── reads/writes ───▶ company worktrees ──▶ GitHub
 ```
 
 ## Quickstart (VPS deploy)
@@ -65,12 +67,13 @@ See [`DEPLOY.md`](./DEPLOY.md) for the full walkthrough. The deployment command 
    - connect GitHub with a PAT, create or attach a repo
    - confirm shared organization context
    - configure notifications (Telegram or email)
-4. **Later changes** live in `Settings`:
+4. **Add more companies** from the sidebar company switcher. New companies reuse the one GitHub PAT and only run through repo selection, context, and notifications. Already connected repos are hidden.
+5. **Later changes** live in `Settings`:
    - re-authorize Claude Code or Codex
    - reconnect GitHub
    - update notifications
    - apply future AIOS-VPS updates in place
-5. **Done.** First scheduled task runs within one heartbeat cycle.
+6. **Done.** First scheduled task runs within one heartbeat cycle.
 
 Target: fresh VPS to first scheduled run in under 15 minutes, first real task within an hour.
 

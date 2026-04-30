@@ -14,6 +14,7 @@ import { join } from "path";
 
 import { config } from "../config";
 import { db } from "../db";
+import { getCurrentCompanyId } from "../company-context";
 import { ensureRootDepartmentName, getRootDepartment, listDepartments, pruneMissingDepartmentsFromAiosYaml } from "./departments";
 import { buildDefaultReadmeMd, ensureAutomationWorkspace, gitRun, rootDisplayNameFromYaml, readAiosYaml, syncRepoWithRemote } from "./repo";
 import { log } from "../log";
@@ -176,10 +177,10 @@ export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }
 function clearRemovedDepartmentState(departments: string[]) {
   for (const department of departments) {
     const abs = join(config.repoDir, department);
-    db.prepare("DELETE FROM backlog WHERE department = ?").run(department);
-    db.prepare("DELETE FROM claims WHERE department = ?").run(department);
-    db.prepare("DELETE FROM cron_state WHERE path = ? OR path LIKE ?").run(abs, `${abs}%`);
-    db.prepare("DELETE FROM goal_state WHERE path = ? OR path LIKE ?").run(abs, `${abs}%`);
+    db.prepare("DELETE FROM backlog WHERE company_id = ? AND department = ?").run(getCurrentCompanyId(), department);
+    db.prepare("DELETE FROM claims WHERE company_id = ? AND department = ?").run(getCurrentCompanyId(), department);
+    db.prepare("DELETE FROM cron_state WHERE company_id = ? AND (path = ? OR path LIKE ?)").run(getCurrentCompanyId(), abs, `${abs}%`);
+    db.prepare("DELETE FROM goal_state WHERE company_id = ? AND (path = ? OR path LIKE ?)").run(getCurrentCompanyId(), abs, `${abs}%`);
   }
 }
 

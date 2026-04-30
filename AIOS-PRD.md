@@ -2,9 +2,9 @@
 
 ## Overview
 
-AIOS is a self-hosted execution layer that turns one GitHub monorepo into an autonomous operating workspace. It runs Claude Code or Codex CLI agents against the repo root or department folders on schedules, webhooks, Telegram messages, or manual dashboard prompts.
+AIOS is a self-hosted execution layer that turns one or more GitHub monorepos into autonomous operating workspaces. A single VPS can manage multiple company repos from the same GitHub account. It runs Claude Code or Codex CLI agents against the active company's repo root or department folders on schedules, webhooks, Telegram messages, or manual dashboard prompts.
 
-The repo remains the source of truth for operating context and agent work: `aios.yaml`, `CLAUDE.md`, `AGENTS.md`, `org.md`, `cron/`, `goals/`, `skills/`, `webhooks/`, `.env`, and `outbox/` define what the system does. The dashboard visualizes and edits those files, while SQLite and filesystem logs hold operational state such as users, sessions, claims, runs, webhook deliveries, usage, notifications, setup state, and credentials metadata.
+Each company repo remains the source of truth for operating context and agent work: `aios.yaml`, `CLAUDE.md`, `AGENTS.md`, `org.md`, `cron/`, `goals/`, `skills/`, `webhooks/`, `.env`, and `outbox/` define what that company does. The dashboard visualizes and edits those files, while SQLite and filesystem logs hold operational state such as companies, users, sessions, claims, runs, webhook deliveries, usage, notifications, setup state, and credentials metadata.
 
 ## Target User
 
@@ -15,6 +15,7 @@ The operator is expected to understand GitHub, VPS deployment, provider CLI subs
 ## Core Principles
 
 - **Repo is the product.** Work definitions and shared operating context live in the monorepo.
+- **Company isolation is repo-backed.** Each company maps to one GitHub repo/worktree and has separate runs, claims, backlog, webhooks, usage, notifications, and Telegram Root Agent state.
 - **Dashboard is an interface, not the authority.** Dashboard edits commit back to the repo where appropriate.
 - **Scopes are folders.** `_root` represents the repo root; department scopes are top-level folders listed in `aios.yaml`.
 - **Agents are interchangeable.** Cron tasks, goals, manual prompts, webhooks, and Telegram turns can run through Claude Code or Codex when that provider is authorized.
@@ -24,7 +25,7 @@ The operator is expected to understand GitHub, VPS deployment, provider CLI subs
 
 AIOS connects to:
 
-- **GitHub** for the operator monorepo. AIOS pulls before work, commits changes, pushes after successful runs, polls the remote every 60 seconds, and creates/updates a GitHub push webhook when connected with a PAT that has enough permission.
+- **GitHub** for the operator company repos. AIOS uses one GitHub PAT; every connected company repo must be accessible from that account. AIOS pulls before work, commits changes, pushes after successful runs, polls remotes every 60 seconds, and creates/updates GitHub push webhooks when connected with a PAT that has enough permission.
 - **Claude Code CLI** through OAuth PKCE plus `claude auth login`.
 - **OpenAI Codex CLI** through `codex login --device-auth`.
 - **Telegram or SMTP email** for owner notifications.
@@ -57,7 +58,7 @@ On first visit to `http://<vps-ip>:3100`, the operator creates the first admin a
 7. `notifications` - configure Telegram, email, or none.
 8. `complete` - heartbeat starts doing work.
 
-After onboarding, Settings can re-authorize providers, reconnect GitHub, update notifications, configure the Telegram Root Agent, and run system updates.
+After onboarding, the first repo is the default company. The sidebar company switcher can add more companies by selecting an unused repo from the already-connected GitHub account, writing company context, and configuring that company's Telegram/email notifications. Settings can re-authorize providers, reconnect GitHub, update active-company notifications, configure the active-company Telegram Root Agent, and run system updates.
 
 ## Repo Manifest
 
@@ -138,7 +139,7 @@ A webhook handler is a markdown file at:
 <department>/webhooks/<name>.md
 ```
 
-Public POSTs to `/webhooks/<department>/<name>` load that file, append the JSON payload to the prompt, and start a run in the target department. Optional frontmatter keys `webhookKey`, `webhookSecret`, `key`, or `secret` require the caller to provide a matching `x-webhook-key`, `x-webhook-secret`, `?key=`, or `?secret=`.
+Public POSTs to `/webhooks/<company>/<department>/<name>` load that file from the named company, append the JSON payload to the prompt, and start a run in the target department. The legacy `/webhooks/<department>/<name>` route targets the default company. Optional frontmatter keys `webhookKey`, `webhookSecret`, `key`, or `secret` require the caller to provide a matching `x-webhook-key`, `x-webhook-secret`, `?key=`, or `?secret=`.
 
 Webhook deliveries are recorded in SQLite and shown in the Webhooks dashboard. Current webhook execution uses provider selection fallback from the execution engine rather than a webhook-specific provider picker.
 
@@ -154,12 +155,13 @@ There is no separate local CLI for manual runs in this repository.
 
 The heartbeat:
 
-1. Checks whether onboarding is complete, global pause is off, and no system update is blocking work.
-2. Checks GitHub for remote changes and syncs when needed.
-3. Runs the sync layer when the worktree is not blocked by active runs.
-4. Processes owner notification outbox files and notification retries.
-5. Scans cron tasks and scheduled goals.
-6. Starts or queues candidate runs based on scope claims.
+1. Iterates every fully configured company.
+2. Checks whether onboarding is complete, company pause is off, and no system update is blocking work.
+3. Checks that company's GitHub remote for changes and syncs when needed.
+4. Runs the sync layer when that company worktree is not blocked by active runs.
+5. Processes owner notification outbox files and notification retries.
+6. Scans cron tasks and scheduled goals.
+7. Starts or queues candidate runs based on company-scoped claims.
 
 Each run:
 
@@ -175,7 +177,7 @@ Codex sandbox mode defaults to `danger-full-access` and can be changed with `AIO
 
 ## Claims and Backlog
 
-Claims are stored in SQLite with a six-hour default timeout. A claimed scope rejects simultaneous work; new triggers for that scope go into the backlog unless a caller explicitly disables queueing. Different scopes can run at the same time.
+Claims are stored in SQLite with a six-hour default timeout and are scoped by company. A claimed scope rejects simultaneous work inside that company; new triggers for that scope go into the backlog unless a caller explicitly disables queueing. Different scopes and different companies can run at the same time.
 
 The execution engine accepts multi-scope run requests internally, but the current dashboard and file-based trigger flows primarily create single-scope runs.
 
@@ -206,6 +208,7 @@ When sync commits directly, it uses `aios: sync`.
 The dashboard includes:
 
 - First-admin auth and setup wizard.
+- Company switcher and add-company wizard.
 - Overview with active work, controls, and owner notifications.
 - Runs list and per-run log/detail views with live streaming.
 - Departments list and department detail views.
@@ -219,7 +222,7 @@ The dashboard includes:
 
 ## Notifications
 
-The operator can configure Telegram, SMTP email, or no external notification channel. Agents do not call those services directly; they write markdown files into `outbox/`. AIOS stores owner notifications in SQLite, deletes processed outbox files, shows notifications in the dashboard, and attempts delivery through the configured channel.
+The operator can configure Telegram, SMTP email, or no external notification channel per company. Agents do not call those services directly; they write markdown files into `outbox/`. AIOS stores owner notifications in SQLite, deletes processed outbox files, shows notifications in the dashboard, and attempts delivery through the active company's configured channel.
 
 Outbox notifications support title, priority, tags, body, read/unread state, retry, delivery attempts, and last-error tracking.
 
@@ -240,7 +243,7 @@ Settings can check and apply updates from the configured AIOS-VPS repository and
 
 ## In Scope for the Current Implementation
 
-- Single-tenant deployment with first-admin signup.
+- Multi-company deployment with first-admin signup and one GitHub PAT.
 - Ubuntu/Debian VPS bootstrap and one-command install.
 - Caddy-managed HTTPS onboarding.
 - Claude Code and Codex CLI authorization.

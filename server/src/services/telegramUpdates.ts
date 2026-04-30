@@ -8,6 +8,8 @@ import {
   TelegramUpdate,
 } from "./notifications";
 import { dispatchTelegramAgentQueue, processTelegramAgentUpdates } from "./telegramAgent";
+import { listCompanies } from "./companies";
+import { withCompanyContext } from "../company-context";
 
 let updateTimer: NodeJS.Timeout | null = null;
 let inFlight: Promise<void> | null = null;
@@ -53,6 +55,14 @@ export async function pollTelegramUpdatesOnce(opts: { timeout?: number; skipIfBu
 }
 
 async function doPollTelegramUpdatesOnce(timeout: number) {
+  for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
+    await withCompanyContext(company, async () => {
+      await doPollCurrentCompanyTelegramUpdates(timeout);
+    });
+  }
+}
+
+async function doPollCurrentCompanyTelegramUpdates(timeout: number) {
   const config = getNotificationConfig();
   if (config.channel !== "telegram" || !config.botToken) return;
 

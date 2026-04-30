@@ -9,6 +9,7 @@ import { join, dirname, relative, resolve, sep } from "path";
 import matter from "gray-matter";
 
 import { config } from "../config";
+import { getCurrentCompanyId } from "../company-context";
 import { outboxInstructionsBody } from "./outboxInstructionsBody";
 import { anthropicAuthDetected, buildAnthropicAuthEnv, buildCommonAuthEnv, buildOpenAiAuthEnv, codexAuthDetected } from "./provider-auth";
 import { cloneUrlWithPat, getGithubCreds, GithubCreds } from "./github";
@@ -67,18 +68,35 @@ const LLM_CONFLICT_TIMEOUT_MS = Number(process.env.AIOS_GIT_CONFLICT_TIMEOUT_MS 
 const LLM_CONFLICT_MAX_FILE_BYTES = Number(process.env.AIOS_GIT_CONFLICT_MAX_FILE_BYTES || 200_000);
 let gitAskpassPath: string | null = null;
 let worktreeBlocked = () => false;
-let gitQueue: Promise<unknown> = Promise.resolve();
-const gitSyncStatus: GitSyncStatus = {
-  lastRemoteCheckAt: null,
-  lastRemoteCommit: null,
-  lastLocalCommit: null,
-  pendingInboundSync: false,
-  inProgress: false,
-  blockedByActiveRuns: false,
-  lastSuccessAt: null,
-  lastError: null,
-  lastConflictResolution: null,
-};
+interface RepoRuntime {
+  gitQueue: Promise<unknown>;
+  gitSyncStatus: GitSyncStatus;
+}
+const repoRuntimes = new Map<number, RepoRuntime>();
+
+function createGitSyncStatus(): GitSyncStatus {
+  return {
+    lastRemoteCheckAt: null,
+    lastRemoteCommit: null,
+    lastLocalCommit: null,
+    pendingInboundSync: false,
+    inProgress: false,
+    blockedByActiveRuns: false,
+    lastSuccessAt: null,
+    lastError: null,
+    lastConflictResolution: null,
+  };
+}
+
+function runtime(): RepoRuntime {
+  const companyId = getCurrentCompanyId();
+  let existing = repoRuntimes.get(companyId);
+  if (!existing) {
+    existing = { gitQueue: Promise.resolve(), gitSyncStatus: createGitSyncStatus() };
+    repoRuntimes.set(companyId, existing);
+  }
+  return existing;
+}
 
 async function pathExists(p: string): Promise<boolean> {
   try { await stat(p); return true; } catch { return false; }
@@ -181,10 +199,11 @@ export function isGitWorktreeBlocked(): boolean {
 }
 
 export function getGitSyncStatus(): GitSyncStatus {
-  return { ...gitSyncStatus, blockedByActiveRuns: worktreeBlocked() };
+  return { ...runtime().gitSyncStatus, blockedByActiveRuns: worktreeBlocked() };
 }
 
 export function markInboundSyncPending(reason = "inbound change") {
+  const gitSyncStatus = runtime().gitSyncStatus;
   gitSyncStatus.pendingInboundSync = true;
   gitSyncStatus.lastConflictResolution = reason;
 }
@@ -197,6 +216,7 @@ export async function checkRemoteForUpdates(opts: { force?: boolean } = {}): Pro
   localCommit: string | null;
 }> {
   const now = Date.now();
+  const gitSyncStatus = runtime().gitSyncStatus;
   if (!opts.force && gitSyncStatus.lastRemoteCheckAt && now - gitSyncStatus.lastRemoteCheckAt < DEFAULT_REMOTE_POLL_INTERVAL_MS) {
     return {
       checked: false,
@@ -234,6 +254,7 @@ export async function checkRemoteForUpdates(opts: { force?: boolean } = {}): Pro
 }
 
 export async function reconcilePendingRepoSync(reason = "pending sync"): Promise<RepoSyncResult | null> {
+  const gitSyncStatus = runtime().gitSyncStatus;
   if (!gitSyncStatus.pendingInboundSync) return null;
   if (worktreeBlocked()) {
     gitSyncStatus.blockedByActiveRuns = true;
@@ -254,8 +275,9 @@ export async function reconcilePendingRepoSync(reason = "pending sync"): Promise
 }
 
 async function withGitQueue<T>(fn: () => Promise<T>): Promise<T> {
-  const run = gitQueue.then(fn, fn);
-  gitQueue = run.then(() => undefined, () => undefined);
+  const rt = runtime();
+  const run = rt.gitQueue.then(fn, fn);
+  rt.gitQueue = run.then(() => undefined, () => undefined);
   return run;
 }
 
@@ -375,6 +397,7 @@ export async function pullRepo(): Promise<{ ok: true; changed: boolean; commit: 
 
 export async function syncRepoWithRemote(opts: { notifyOnRemoteWins?: boolean; allowWhenBlocked?: boolean } = {}): Promise<RepoSyncResult> {
   return withGitQueue(async () => {
+    const gitSyncStatus = runtime().gitSyncStatus;
     if (!opts.allowWhenBlocked && worktreeBlocked()) {
       gitSyncStatus.pendingInboundSync = true;
       gitSyncStatus.blockedByActiveRuns = true;

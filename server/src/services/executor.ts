@@ -8,6 +8,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 
 import { config } from "../config";
+import { getCurrentCompanyId } from "../company-context";
 import { db } from "../db";
 import { log } from "../log";
 import {
@@ -40,17 +41,19 @@ export interface RunRequest {
   };
 }
 
-const activeProcesses = new Map<string, ChildProcess>();
-let globalPaused = false;
+const activeProcesses = new Map<string, { proc: ChildProcess; companyId: number }>();
+const pausedCompanies = new Set<number>();
 
-setGitWorktreeBlocked(() => activeProcesses.size > 0);
+setGitWorktreeBlocked(() => activeProcessCount() > 0);
 
 export function setGlobalPause(paused: boolean) {
-  globalPaused = paused;
+  const companyId = getCurrentCompanyId();
+  if (paused) pausedCompanies.add(companyId);
+  else pausedCompanies.delete(companyId);
   log.info(`global-pause: ${paused}`);
 }
 
-export function isGlobalPaused() { return globalPaused; }
+export function isGlobalPaused() { return pausedCompanies.has(getCurrentCompanyId()); }
 
 function getDefaultProvider(): Provider {
   return (process.env.AIOS_DEFAULT_PROVIDER as Provider) || "claude-code";
@@ -176,7 +179,7 @@ export async function startRun(req: RunRequest): Promise<StartRunResult> {
       reason: `${displayProvider(req.provider)} is not authorized`,
     };
   }
-  if (globalPaused) {
+  if (isGlobalPaused()) {
     return { run: createRun({ department: req.departments[0] || "unknown", trigger: req.trigger, provider: null, prompt: req.prompt, status: "canceled" }), accepted: false, reason: "global pause" };
   }
   if (await isSystemUpdateBlocking()) {
@@ -229,7 +232,7 @@ async function startQueuedRun(runId: string, req: RunRequest): Promise<StartRunR
     });
     return { run: getRun(runId)!, accepted: false, reason: `${displayProvider(req.provider)} is not authorized` };
   }
-  if (globalPaused) {
+  if (isGlobalPaused()) {
     updateRun(runId, { status: "canceled", ended_at: Date.now(), error: "global pause" });
     return { run: getRun(runId)!, accepted: false, reason: "global pause" };
   }
@@ -290,7 +293,7 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
     await finalize(runId, depts, { exitCode: 1, error: `spawn failed: ${e?.message || e}` });
     return;
   }
-  activeProcesses.set(runId, child);
+  activeProcesses.set(runId, { proc: child, companyId: getCurrentCompanyId() });
 
   const stdoutChunks: Buffer[] = [];
   const stderrChunks: Buffer[] = [];
@@ -342,7 +345,7 @@ async function actuallyRun(runId: string, depts: string[], req: RunRequest) {
 
   let commitSha: string | null = null;
   if (code === 0 && req.commitOnSuccess !== false) {
-    if (activeProcesses.size > 0) {
+    if (activeProcessCount() > 0) {
       markInboundSyncPending("agent finished while another agent is active");
       log.info("deferring git commit until active agents finish", runId);
     } else {
@@ -417,9 +420,10 @@ export async function processBacklogForDepartments(depts: string[]) {
 export function recoverOrphanedQueuedBacklogRuns(): number {
   const queued = db.prepare(`
     SELECT id FROM runs
-    WHERE status = 'queued'
+    WHERE company_id = ?
+      AND status = 'queued'
       AND error = 'department busy; queued to backlog'
-  `).all() as Array<{ id: string }>;
+  `).all(getCurrentCompanyId()) as Array<{ id: string }>;
   if (!queued.length) return 0;
 
   const referencedRunIds = new Set<string>();
@@ -434,7 +438,7 @@ export function recoverOrphanedQueuedBacklogRuns(): number {
   const now = Date.now();
   for (const run of queued) {
     if (referencedRunIds.has(run.id)) continue;
-    const claimed = db.prepare("SELECT 1 FROM claims WHERE run_id = ?").get(run.id);
+    const claimed = db.prepare("SELECT 1 FROM claims WHERE company_id = ? AND run_id = ?").get(getCurrentCompanyId(), run.id);
     if (claimed) continue;
     updateRun(run.id, {
       status: "canceled",
@@ -465,26 +469,34 @@ async function tryCommitAndPush(runId: string, dept: string, trigger: string): P
 
 export function killRun(runId: string): boolean {
   const proc = activeProcesses.get(runId);
-  if (!proc) return false;
-  try { proc.kill("SIGTERM"); } catch {}
+  if (!proc || proc.companyId !== getCurrentCompanyId()) return false;
+  try { proc.proc.kill("SIGTERM"); } catch {}
   return true;
 }
 
 export function killAllRuns(): number {
-  const runIds = [...activeProcesses.keys()];
+  const companyId = getCurrentCompanyId();
+  const runIds = [...activeProcesses.entries()]
+    .filter(([, entry]) => entry.companyId === companyId)
+    .map(([runId]) => runId);
   for (const runId of runIds) killRun(runId);
   return runIds.length;
 }
 
-export function activeProcessCount() { return activeProcesses.size; }
+export function activeProcessCount(scope: "current" | "all" = "current") {
+  if (scope === "all") return activeProcesses.size;
+  const companyId = getCurrentCompanyId();
+  return [...activeProcesses.values()].filter((entry) => entry.companyId === companyId).length;
+}
 
 async function recordUsage(runId: string, department: string, provider: Provider, logPath: string) {
   const raw = await readFile(logPath, "utf-8").catch(() => "");
   const usage = parseUsage(raw);
   db.prepare(`
-    INSERT INTO usage(run_id, department, provider, tokens_in, tokens_out, cost_usd, recorded_at)
-    VALUES(?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO usage(company_id, run_id, department, provider, tokens_in, tokens_out, cost_usd, recorded_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    getCurrentCompanyId(),
     runId,
     department,
     provider,

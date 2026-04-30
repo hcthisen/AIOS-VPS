@@ -8,6 +8,8 @@ import { getSession, getUser } from "./auth";
 import { buildCommonAuthEnv } from "./services/provider-auth";
 import { config } from "./config";
 import { log } from "./log";
+import { getCompanyBySlug, getDefaultCompany } from "./services/companies";
+import { withCompanyContext } from "./company-context";
 
 type PtyModule = typeof import("node-pty") | null;
 let ptyMod: PtyModule = null;
@@ -25,7 +27,13 @@ export function attachTerminal(httpServer: HttpServer) {
       const auth = authenticate(req);
       if (!auth) { socket.destroy(); return; }
       if (!ptyMod) { socket.destroy(); return; }
-      wss.handleUpgrade(req, socket, head, (ws) => spawnShell(ws, auth));
+      const company = url.searchParams.get("company")
+        ? getCompanyBySlug(url.searchParams.get("company") || "")
+        : getDefaultCompany();
+      if (!company) { socket.destroy(); return; }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        withCompanyContext(company, () => spawnShell(ws, auth));
+      });
     } catch {
       socket.destroy();
     }

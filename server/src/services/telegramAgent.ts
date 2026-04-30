@@ -1,10 +1,12 @@
 import { db, kvGet, kvSet } from "../db";
+import { getCurrentCompanyId, withCompanyContext } from "../company-context";
 import { log } from "../log";
 import { getClaim } from "./claims";
 import { Provider, ProviderConversationResult, killRun, startRun } from "./executor";
 import { getNotificationConfig, getTelegramPairingState, pickTelegramMessage, sendTelegramMessage, TelegramUpdate } from "./notifications";
 import { displayProvider, getProviderAvailability, isProviderAuthorized } from "./providerAvailability";
 import { getRun, runEvents, Run } from "./runs";
+import { listCompanies } from "./companies";
 
 type TelegramAgentMessageStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 
@@ -45,8 +47,12 @@ const DEFAULT_CONFIG: TelegramAgentConfig = {
 let pollTimer: NodeJS.Timeout | null = null;
 let dispatching = false;
 
+function scopedKey(key: string): string {
+  return `company.${getCurrentCompanyId()}.${key}`;
+}
+
 export function getTelegramAgentConfig(): TelegramAgentConfig {
-  const raw = kvGet(CONFIG_KEY);
+  const raw = kvGet(scopedKey(CONFIG_KEY)) || (getCurrentCompanyId() === 1 ? kvGet(CONFIG_KEY) : null);
   if (!raw) return { ...DEFAULT_CONFIG };
   try {
     const parsed = JSON.parse(raw);
@@ -65,7 +71,7 @@ export function getTelegramAgentConfig(): TelegramAgentConfig {
 }
 
 function setTelegramAgentConfig(config: TelegramAgentConfig) {
-  kvSet(CONFIG_KEY, JSON.stringify({ ...config, updatedAt: Date.now() }));
+  kvSet(scopedKey(CONFIG_KEY), JSON.stringify({ ...config, updatedAt: Date.now() }));
 }
 
 export async function saveTelegramAgentConfig(input: { enabled?: boolean; provider?: Provider }) {
@@ -127,8 +133,8 @@ export function resetTelegramAgentSession(): { killed: number; canceled: number;
   const canceled = db.prepare(`
     UPDATE telegram_agent_messages
     SET status = 'canceled', finished_at = ?, error = 'session reset from dashboard'
-    WHERE status IN ('queued', 'running')
-  `).run(Date.now()).changes;
+    WHERE company_id = ? AND status IN ('queued', 'running')
+  `).run(Date.now(), getCurrentCompanyId()).changes;
   setTelegramAgentConfig({
     ...current,
     sessionId: null,
@@ -141,9 +147,9 @@ export function enqueueTelegramAgentMessage(input: { updateId: number; chatId: s
   const text = input.text.trim();
   if (!text) return false;
   const result = db.prepare(`
-    INSERT OR IGNORE INTO telegram_agent_messages(update_id, chat_id, text, status, received_at)
-    VALUES(?, ?, ?, 'queued', ?)
-  `).run(input.updateId, input.chatId, text, Date.now());
+    INSERT OR IGNORE INTO telegram_agent_messages(company_id, update_id, chat_id, text, status, received_at)
+    VALUES(?, ?, ?, ?, 'queued', ?)
+  `).run(getCurrentCompanyId(), input.updateId, input.chatId, text, Date.now());
   return result.changes > 0;
 }
 
@@ -167,7 +173,9 @@ export function buildTelegramRootPrompt(messages: TelegramAgentMessage[]): strin
 
 export function startTelegramAgent() {
   if (pollTimer) return;
-  recoverInterruptedMessages();
+  for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
+    withCompanyContext(company, () => recoverInterruptedMessages());
+  }
   scheduleDispatch(500);
 }
 
@@ -185,7 +193,11 @@ function scheduleDispatch(delayMs: number) {
 
 async function dispatchLoop() {
   try {
-    await dispatchTelegramAgentQueue();
+    for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
+      await withCompanyContext(company, async () => {
+        await dispatchTelegramAgentQueue();
+      });
+    }
     scheduleDispatch(2_000);
   } catch (e: any) {
     log.warn("telegram root agent dispatch failed", e?.message || e);
@@ -287,9 +299,9 @@ async function normalizeTelegramAgentProvider(config: TelegramAgentConfig): Prom
 function queuedMessages(): TelegramAgentMessage[] {
   return db.prepare(`
     SELECT * FROM telegram_agent_messages
-    WHERE status = 'queued'
+    WHERE company_id = ? AND status = 'queued'
     ORDER BY id ASC
-  `).all() as TelegramAgentMessage[];
+  `).all(getCurrentCompanyId()) as TelegramAgentMessage[];
 }
 
 function markMessagesRunning(messages: TelegramAgentMessage[], runId: string, provider: Provider, sessionId: string | null) {
@@ -299,8 +311,8 @@ function markMessagesRunning(messages: TelegramAgentMessage[], runId: string, pr
   db.prepare(`
     UPDATE telegram_agent_messages
     SET status = 'running', run_id = ?, provider = ?, session_id = ?, started_at = ?
-    WHERE id IN (${placeholders})
-  `).run(runId, provider, sessionId, Date.now(), ...ids);
+    WHERE company_id = ? AND id IN (${placeholders})
+  `).run(runId, provider, sessionId, Date.now(), getCurrentCompanyId(), ...ids);
 }
 
 function markMessagesFinished(messages: TelegramAgentMessage[], status: "succeeded" | "failed", sessionId: string | null, error: string | null) {
@@ -310,20 +322,20 @@ function markMessagesFinished(messages: TelegramAgentMessage[], status: "succeed
   db.prepare(`
     UPDATE telegram_agent_messages
     SET status = ?, session_id = ?, finished_at = ?, error = ?
-    WHERE id IN (${placeholders})
-  `).run(status, sessionId, Date.now(), error, ...ids);
+    WHERE company_id = ? AND id IN (${placeholders})
+  `).run(status, sessionId, Date.now(), error, getCurrentCompanyId(), ...ids);
 }
 
 function countMessages(status: TelegramAgentMessageStatus): number {
-  const row = db.prepare("SELECT COUNT(*) AS count FROM telegram_agent_messages WHERE status = ?").get(status) as { count: number };
+  const row = db.prepare("SELECT COUNT(*) AS count FROM telegram_agent_messages WHERE company_id = ? AND status = ?").get(getCurrentCompanyId(), status) as { count: number };
   return Number(row.count || 0);
 }
 
 function activeTelegramRunIds(): string[] {
   const rows = db.prepare(`
     SELECT DISTINCT run_id AS runId FROM telegram_agent_messages
-    WHERE status = 'running' AND run_id IS NOT NULL
-  `).all() as Array<{ runId: string }>;
+    WHERE company_id = ? AND status = 'running' AND run_id IS NOT NULL
+  `).all(getCurrentCompanyId()) as Array<{ runId: string }>;
   return rows.map((row) => row.runId).filter(Boolean);
 }
 
@@ -339,8 +351,8 @@ function recoverInterruptedMessages() {
   db.prepare(`
     UPDATE telegram_agent_messages
     SET status = 'queued', run_id = NULL, started_at = NULL, error = 'recovered after server restart'
-    WHERE status = 'running'
-  `).run();
+    WHERE company_id = ? AND status = 'running'
+  `).run(getCurrentCompanyId());
 }
 
 function waitForRunFinished(runId: string): Promise<{ run: Run; conversation: ProviderConversationResult | null }> {

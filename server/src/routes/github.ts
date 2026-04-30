@@ -22,6 +22,7 @@ import {
 import { pollTelegramUpdatesOnce } from "../services/telegramUpdates";
 import { buildCommonAuthEnv } from "../services/provider-auth";
 import { runSyncLayer } from "../services/sync";
+import { updateDefaultCompanyRepo } from "../services/companies";
 import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
@@ -106,6 +107,7 @@ export function registerOnboardingRoutes(router: Router) {
       // non-fatal; operator can retry push
     }
     const webhook = await ensurePushWebhook(creds.token, r.fullName);
+    updateDefaultCompanyRepo(r.fullName);
     if (getSetupPhase() === "repo_setup") advanceSetupPhase("repo_setup");
     res.json({ ok: true, fullName: r.fullName, commit: await repoHead(), webhook, setupPhase: getSetupPhase() });
   });
@@ -122,6 +124,7 @@ export function registerOnboardingRoutes(router: Router) {
     const v = await validateAiosRepo(config.repoDir);
     if (!v.ok) throw badRequest(v.error || "validation failed");
     const webhook = await ensurePushWebhook(creds.token, fullName);
+    updateDefaultCompanyRepo(fullName);
     if (getSetupPhase() === "repo_setup") advanceSetupPhase("repo_setup");
     res.json({ ok: true, fullName, yaml: v.yaml, webhook, setupPhase: getSetupPhase() });
   });

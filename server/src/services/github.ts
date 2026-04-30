@@ -8,6 +8,8 @@ import { promisify } from "util";
 import { config } from "../config";
 import { kvGet, kvSet } from "../db";
 import { detectPublicIp } from "./caddy";
+import { getCurrentCompanyId } from "../company-context";
+import { ensureCompanyWebhookSecret } from "./companies";
 
 export interface GithubCreds {
   mode: "pat" | "deploy_key";
@@ -95,6 +97,8 @@ export async function createRepo(
 export function githubWebhookSecret(): string {
   const envSecret = String(process.env.AIOS_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || "").trim();
   if (envSecret) return envSecret;
+  const companySecret = ensureCompanyWebhookSecret(getCurrentCompanyId());
+  if (companySecret) return companySecret;
   const stored = kvGet(WEBHOOK_SECRET_KEY);
   if (stored) return stored;
   const generated = randomBytes(32).toString("hex");
@@ -135,15 +139,16 @@ async function defaultWebhookBaseUrl(): Promise<string | null> {
 export async function ensureGitHubPushWebhook(
   token: string,
   fullName: string,
-  opts: { baseUrl?: string | null } = {},
+  opts: { baseUrl?: string | null; path?: string; secret?: string } = {},
 ): Promise<{ ok: true; url: string; hookId: number | null; action: "created" | "updated" } | { ok: false; url?: string; error: string }> {
   const baseUrl = String(typeof opts.baseUrl === "undefined" ? await defaultWebhookBaseUrl() : opts.baseUrl || "").trim().replace(/\/+$/, "");
   if (!baseUrl) return { ok: false, error: "public AIOS base URL is not configured" };
-  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return { ok: false, url: `${baseUrl}/github/webhook`, error: "invalid GitHub repo full name" };
+  const webhookPath = opts.path || "/github/webhook";
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return { ok: false, url: `${baseUrl}${webhookPath}`, error: "invalid GitHub repo full name" };
 
-  const url = `${baseUrl}/github/webhook`;
+  const url = `${baseUrl}${webhookPath}`;
   const encodedFullName = fullName.split("/").map(encodeURIComponent).join("/");
-  const secret = githubWebhookSecret();
+  const secret = opts.secret || githubWebhookSecret();
   const body = {
     name: "web",
     active: true,

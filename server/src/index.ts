@@ -2,6 +2,7 @@ import { config } from "./config";
 import { log } from "./log";
 import { createHttpServer, Router } from "./http";
 import { sessionMiddleware } from "./auth";
+import { companyMiddleware } from "./company-middleware";
 import { registerHealthRoutes } from "./routes/health";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerVpsSetupRoutes } from "./routes/vps-setup";
@@ -11,6 +12,7 @@ import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerStorageRoutes } from "./routes/storage";
 import { registerSettingsRoutes } from "./routes/settings";
 import { registerGithubWebhookRoutes } from "./routes/github-webhook";
+import { registerCompanyRoutes } from "./routes/companies";
 import { attachTerminal } from "./terminal";
 import { startHeartbeat } from "./services/heartbeat";
 import { maybeServePublicObject } from "./services/publicBaseUrl";
@@ -18,16 +20,20 @@ import { reconcileSystemUpdateState } from "./services/systemUpdate";
 import { startTelegramAgent } from "./services/telegramAgent";
 import { startTelegramUpdates } from "./services/telegramUpdates";
 import { recoverOrphanedQueuedBacklogRuns } from "./services/executor";
+import { initCompanyContextFallback } from "./services/companies";
 
 async function main() {
   const router = new Router();
   router.use(sessionMiddleware);
+  initCompanyContextFallback();
+  router.use(companyMiddleware);
 
   registerHealthRoutes(router);
   registerAuthRoutes(router);
   registerVpsSetupRoutes(router);
   registerProviderAuthRoutes(router);
   registerOnboardingRoutes(router);
+  registerCompanyRoutes(router);
   registerDashboardRoutes(router);
   registerStorageRoutes(router);
   registerSettingsRoutes(router);

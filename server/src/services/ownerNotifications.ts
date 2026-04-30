@@ -6,6 +6,7 @@ import matter from "gray-matter";
 
 import { config } from "../config";
 import { db } from "../db";
+import { getCurrentCompanyId } from "../company-context";
 import { getRootDepartment, listDepartments } from "./departments";
 import { getNotificationConfig, sendNotification } from "./notifications";
 
@@ -14,6 +15,7 @@ export type OwnerNotificationPriority = "info" | "warning" | "critical";
 
 export interface OwnerNotification {
   id: number;
+  company_id?: number;
   source_scope: string;
   source_path: string;
   content_hash: string;
@@ -111,11 +113,12 @@ function insertNotification(input: {
   try {
     const info = db.prepare(`
       INSERT INTO owner_notifications(
-        source_scope, source_path, content_hash, run_id, title, body, priority, tags,
+        company_id, source_scope, source_path, content_hash, run_id, title, body, priority, tags,
         status, delivery_channel, delivery_attempts, last_error, created_at, raw_frontmatter
       )
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
     `).run(
+      getCurrentCompanyId(),
       input.sourceScope,
       input.sourcePath,
       input.contentHash,
@@ -207,7 +210,8 @@ export async function processOwnerNotificationOutbox(opts: { runId?: string | nu
 }
 
 export function getNotification(id: number): OwnerNotification | null {
-  return db.prepare("SELECT * FROM owner_notifications WHERE id = ?").get(id) as OwnerNotification | undefined || null;
+  return db.prepare("SELECT * FROM owner_notifications WHERE id = ? AND company_id = ?")
+    .get(id, getCurrentCompanyId()) as OwnerNotification | undefined || null;
 }
 
 export function listOwnerNotifications(opts: NotificationListOptions = {}): { notifications: OwnerNotification[]; total: number } {
@@ -232,12 +236,15 @@ export function listOwnerNotifications(opts: NotificationListOptions = {}): { no
     args.push(opts.status);
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const total = db.prepare(`SELECT COUNT(*) AS count FROM owner_notifications ${whereSql}`).get(...args) as { count: number };
+  where.unshift("company_id = ?");
+  args.unshift(getCurrentCompanyId());
+  const scopedWhereSql = `WHERE ${where.join(" AND ")}`;
+  const total = db.prepare(`SELECT COUNT(*) AS count FROM owner_notifications ${scopedWhereSql}`).get(...args) as { count: number };
   const limit = clampLimit(opts.limit);
   const offset = clampOffset(opts.offset);
   const notifications = db.prepare(`
     SELECT * FROM owner_notifications
-    ${whereSql}
+    ${scopedWhereSql}
     ORDER BY created_at DESC, id DESC
     LIMIT ? OFFSET ?
   `).all(...args, limit, offset) as OwnerNotification[];
@@ -245,7 +252,7 @@ export function listOwnerNotifications(opts: NotificationListOptions = {}): { no
 }
 
 export function markOwnerNotificationRead(id: number, read: boolean): OwnerNotification | null {
-  db.prepare("UPDATE owner_notifications SET read_at = ? WHERE id = ?").run(read ? Date.now() : null, id);
+  db.prepare("UPDATE owner_notifications SET read_at = ? WHERE id = ? AND company_id = ?").run(read ? Date.now() : null, id, getCurrentCompanyId());
   return getNotification(id);
 }
 
@@ -262,8 +269,8 @@ export async function deliverOwnerNotification(id: number): Promise<OwnerNotific
     db.prepare(`
       UPDATE owner_notifications
       SET status = 'no_channel', delivery_channel = 'none', last_error = NULL
-      WHERE id = ?
-    `).run(id);
+      WHERE id = ? AND company_id = ?
+    `).run(id, getCurrentCompanyId());
     return getNotification(id);
   }
 
@@ -274,14 +281,14 @@ export async function deliverOwnerNotification(id: number): Promise<OwnerNotific
     db.prepare(`
       UPDATE owner_notifications
       SET status = 'delivered', delivery_channel = ?, delivery_attempts = ?, last_error = NULL, delivered_at = ?
-      WHERE id = ?
-    `).run(notificationConfig.channel, attempts, Date.now(), id);
+      WHERE id = ? AND company_id = ?
+    `).run(notificationConfig.channel, attempts, Date.now(), id, getCurrentCompanyId());
   } else {
     db.prepare(`
       UPDATE owner_notifications
       SET status = 'failed', delivery_channel = ?, delivery_attempts = ?, last_error = ?
-      WHERE id = ?
-    `).run(notificationConfig.channel, attempts, sent.error || "delivery failed", id);
+      WHERE id = ? AND company_id = ?
+    `).run(notificationConfig.channel, attempts, sent.error || "delivery failed", id, getCurrentCompanyId());
   }
   return getNotification(id);
 }
@@ -289,10 +296,10 @@ export async function deliverOwnerNotification(id: number): Promise<OwnerNotific
 export async function retryPendingOwnerNotifications(limit = 20): Promise<number> {
   const rows = db.prepare(`
     SELECT id FROM owner_notifications
-    WHERE status IN ('pending', 'failed', 'no_channel')
+    WHERE company_id = ? AND status IN ('pending', 'failed', 'no_channel')
     ORDER BY created_at ASC
     LIMIT ?
-  `).all(limit) as Array<{ id: number }>;
+  `).all(getCurrentCompanyId(), limit) as Array<{ id: number }>;
   let attempted = 0;
   for (const row of rows) {
     const before = getNotification(row.id);

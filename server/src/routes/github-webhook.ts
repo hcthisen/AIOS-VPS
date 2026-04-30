@@ -3,6 +3,8 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { badRequest, Router, unauthorized } from "../http";
 import { githubWebhookSecret } from "../services/github";
 import { checkRemoteForUpdates, markInboundSyncPending, reconcilePendingRepoSync } from "../services/repo";
+import { getCompanyBySlug, getDefaultCompany } from "../services/companies";
+import { withCompanyContext } from "../company-context";
 
 function webhookSecret(): string {
   return githubWebhookSecret();
@@ -19,6 +21,21 @@ function verifySignature(raw: Buffer | undefined, header: string | string[] | un
 
 export function registerGithubWebhookRoutes(router: Router) {
   router.post("/github/webhook", async (req, res) => {
+    await withCompanyContext(getDefaultCompany(), async () => {
+      await handleGithubWebhook(req, res);
+    });
+  });
+
+  router.post("/github/webhook/:companySlug", async (req, res) => {
+    const company = getCompanyBySlug(req.params.companySlug);
+    if (!company) throw badRequest("unknown company");
+    await withCompanyContext(company, async () => {
+      await handleGithubWebhook(req, res);
+    });
+  });
+}
+
+async function handleGithubWebhook(req: any, res: any) {
     const secret = webhookSecret();
     if (!secret) throw badRequest("GitHub webhook secret is not configured");
     if (!verifySignature(req.rawBody, req.headers["x-hub-signature-256"], secret)) {
@@ -35,5 +52,4 @@ export function registerGithubWebhookRoutes(router: Router) {
     const remote = await checkRemoteForUpdates({ force: true });
     const sync = await reconcilePendingRepoSync("github push webhook");
     res.json({ ok: true, remote, sync });
-  });
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api";
+import { api, getActiveCompanySlug } from "../api";
 import { Section } from "../components/Section";
 import { IconButton } from "../components/IconButton";
 
@@ -55,7 +55,8 @@ export function WebhooksPage({ navigate }: { navigate: (t: string) => void }) {
   const selectedDelivery = rows.find((row) => row.id === selectedDeliveryId) || null;
   const activeEndpoint = selectedDelivery?.endpoint || selectedEndpoint;
   const selectedHandler = handlers.find((handler) => handler.endpoint === activeEndpoint) || null;
-  const endpointUrl = activeEndpoint ? `${window.location.origin}/webhooks/${activeEndpoint}` : null;
+  const companySlug = getActiveCompanySlug();
+  const endpointUrl = activeEndpoint ? `${window.location.origin}/webhooks/${companySlug ? `${companySlug}/` : ""}${activeEndpoint}` : null;
   const exampleMarkdown = buildWebhookExampleMarkdown(selectedHandler, endpointUrl || "");
 
   return (
