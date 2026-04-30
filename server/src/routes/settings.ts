@@ -27,7 +27,7 @@ import {
   resetTelegramAgentSession,
   saveTelegramAgentConfig,
 } from "../services/telegramAgent";
-import { pollTelegramUpdatesOnce } from "../services/telegramUpdates";
+import { pollCurrentCompanyTelegramUpdatesOnce } from "../services/telegramUpdates";
 import { normalizeTimezoneOffsetMinutes, serverTimeSnapshot } from "../services/time";
 import { listCompanies } from "../services/companies";
 import { withCompanyContext } from "../company-context";
@@ -251,7 +251,7 @@ export function registerSettingsRoutes(router: Router) {
   router.get("/api/settings/notifications/telegram/pairing", async (req, res) => {
     await guard(req, res);
     try {
-      await pollTelegramUpdatesOnce({ timeout: 0, skipIfBusy: true });
+      await pollCurrentCompanyTelegramUpdatesOnce({ timeout: 0, skipIfBusy: false });
       const pairing = await syncTelegramPairing();
       res.json({ ok: true, ...pairing });
     } catch (e: any) {

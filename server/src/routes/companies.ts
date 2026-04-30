@@ -24,7 +24,7 @@ import {
   setNotificationConfig,
   syncTelegramPairing,
 } from "../services/notifications";
-import { pollTelegramUpdatesOnce } from "../services/telegramUpdates";
+import { pollCurrentCompanyTelegramUpdatesOnce } from "../services/telegramUpdates";
 
 export function registerCompanyRoutes(router: Router) {
   const guard = adminOnly();
@@ -192,7 +192,7 @@ export function registerCompanyRoutes(router: Router) {
     await guard(req, res);
     const company = mustCompany(req.params.slug);
     await withCompanyContext(company, async () => {
-      await pollTelegramUpdatesOnce({ timeout: 0, skipIfBusy: true });
+      await pollCurrentCompanyTelegramUpdatesOnce({ timeout: 0, skipIfBusy: false });
       res.json({ ok: true, ...(await syncTelegramPairing()) });
     });
   });

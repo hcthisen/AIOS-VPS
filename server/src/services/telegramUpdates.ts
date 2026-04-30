@@ -9,10 +9,10 @@ import {
 } from "./notifications";
 import { dispatchTelegramAgentQueue, processTelegramAgentUpdates } from "./telegramAgent";
 import { listCompanies } from "./companies";
-import { withCompanyContext } from "../company-context";
+import { getCurrentCompanyId, withCompanyContext } from "../company-context";
 
 let updateTimer: NodeJS.Timeout | null = null;
-let inFlight: Promise<void> | null = null;
+const inFlightByCompany = new Map<number, Promise<void>>();
 
 export function startTelegramUpdates() {
   if (updateTimer) return;
@@ -42,24 +42,31 @@ async function pollLoop() {
 }
 
 export async function pollTelegramUpdatesOnce(opts: { timeout?: number; skipIfBusy?: boolean } = {}): Promise<{ polled: boolean }> {
-  if (inFlight) {
-    if (opts.skipIfBusy !== false) return { polled: false };
-    await inFlight;
-    return { polled: false };
-  }
-  inFlight = doPollTelegramUpdatesOnce(opts.timeout ?? 0).finally(() => {
-    inFlight = null;
-  });
-  await inFlight;
-  return { polled: true };
-}
-
-async function doPollTelegramUpdatesOnce(timeout: number) {
+  let polled = false;
   for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
     await withCompanyContext(company, async () => {
-      await doPollCurrentCompanyTelegramUpdates(timeout);
+      const result = await pollCurrentCompanyTelegramUpdatesOnce(opts);
+      polled = polled || result.polled;
     });
   }
+  return { polled };
+}
+
+export async function pollCurrentCompanyTelegramUpdatesOnce(opts: { timeout?: number; skipIfBusy?: boolean } = {}): Promise<{ polled: boolean }> {
+  const companyId = getCurrentCompanyId();
+  const existing = inFlightByCompany.get(companyId);
+  if (existing) {
+    if (opts.skipIfBusy !== false) return { polled: false };
+    await existing;
+    return { polled: false };
+  }
+
+  const poll = doPollCurrentCompanyTelegramUpdates(opts.timeout ?? 0).finally(() => {
+    inFlightByCompany.delete(companyId);
+  });
+  inFlightByCompany.set(companyId, poll);
+  await poll;
+  return { polled: true };
 }
 
 async function doPollCurrentCompanyTelegramUpdates(timeout: number) {
