@@ -1,7 +1,7 @@
 import { db, kvGet, kvSet } from "../db";
 import { getCurrentCompanyId, withCompanyContext } from "../company-context";
 import { log } from "../log";
-import { getClaim } from "./claims";
+import { expireStaleClaims, getClaim, releaseClaimsForRun } from "./claims";
 import { Provider, ProviderConversationResult, killRun, startRun } from "./executor";
 import { getNotificationConfig, getTelegramPairingState, pickTelegramMessage, sendTelegramMessage, TelegramUpdate } from "./notifications";
 import { displayProvider, getProviderAvailability, isProviderAuthorized } from "./providerAvailability";
@@ -240,7 +240,7 @@ async function doDispatchTelegramAgentQueue() {
     const config = getTelegramAgentConfig();
     const notification = getNotificationConfig();
     if (!config.enabled || notification.channel !== "telegram" || !notification.chatId) return;
-    if (getClaim("_root")) return;
+    if (rootClaimBlocksTelegramDispatch()) return;
 
     const messages = queuedMessages();
     if (!messages.length) return;
@@ -286,6 +286,19 @@ async function doDispatchTelegramAgentQueue() {
       await sendTelegramReply(notification.chatId, `The Root agent did not finish successfully: ${error}`);
     }
   }
+}
+
+function rootClaimBlocksTelegramDispatch(): boolean {
+  expireStaleClaims();
+  const claim = getClaim("_root");
+  if (!claim) return false;
+
+  const run = getRun(claim.run_id);
+  if (run && (run.status === "queued" || run.status === "running")) return true;
+
+  releaseClaimsForRun(claim.run_id);
+  log.warn("released stale Telegram root claim", claim.run_id);
+  return false;
 }
 
 function queuedMessages(): TelegramAgentMessage[] {

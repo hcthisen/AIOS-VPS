@@ -4,15 +4,19 @@ import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
+import { withCompanyContext } from "../company-context";
 import { db, kvDel, kvGet, kvSet } from "../db";
 import {
   buildTelegramRootPrompt,
+  dispatchTelegramAgentQueue,
   enqueueTelegramAgentMessage,
   getTelegramAgentStatus,
   resetTelegramAgentSession,
   saveTelegramAgentConfig,
   TelegramAgentMessage,
 } from "./telegramAgent";
+import { setNotificationConfig } from "./notifications";
+import { Company, getCompanyBySlug } from "./companies";
 
 describe("telegramAgent", () => {
   let previousAiosHome: string | undefined;
@@ -23,8 +27,10 @@ describe("telegramAgent", () => {
     tempHome = await mkdtemp(join(tmpdir(), "aios-telegram-agent-home-"));
     process.env.AIOS_HOME = tempHome;
     db.prepare("DELETE FROM telegram_agent_messages").run();
+    db.prepare("DELETE FROM claims").run();
     kvDel("telegram.rootAgent.config");
     kvDel("company.1.telegram.rootAgent.config");
+    kvDel("company.1.notifications.config");
   });
 
   afterEach(async () => {
@@ -145,4 +151,70 @@ describe("telegramAgent", () => {
     assert.equal(stored.sessionId, null);
     assert.equal(stored.resetGeneration, 4);
   });
+
+  it("expires stale root claims before dispatching queued Telegram messages", async () => {
+    const originalFetch = globalThis.fetch;
+    const company = insertCompany("telegram-agent-stale-claim", "Telegram Agent Stale Claim");
+    globalThis.fetch = mockTelegramSendFetch();
+    try {
+      await withCompanyContext(company, async () => {
+        setNotificationConfig({ channel: "telegram", botToken: "123:test", chatId: "42" });
+        kvSet(`company.${company.id}.telegram.rootAgent.config`, JSON.stringify({
+          enabled: true,
+          provider: "codex",
+          sessionId: null,
+          offset: null,
+          resetGeneration: 0,
+          updatedAt: Date.now(),
+        }));
+        enqueueTelegramAgentMessage({ updateId: 125, chatId: "42", text: "process me" });
+        db.prepare(`
+          INSERT INTO claims(company_id, department, run_id, claimed_at, expires_at)
+          VALUES(?, '_root', 'stale-run', ?, ?)
+        `).run(company.id, Date.now() - 10_000, Date.now() - 1);
+
+        await dispatchTelegramAgentQueue();
+      });
+
+      const message = db.prepare("SELECT status, error FROM telegram_agent_messages WHERE company_id = ? AND update_id = 125").get(company.id) as { status: string; error: string };
+      const claim = db.prepare("SELECT 1 FROM claims WHERE company_id = ? AND department = '_root'").get(company.id);
+      assert.equal(claim, undefined);
+      assert.equal(message.status, "failed");
+      assert.match(message.error, /Codex is not authorized/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanupCompany("telegram-agent-stale-claim");
+    }
+  });
 });
+
+function mockTelegramSendFetch(): typeof fetch {
+  return (async (url: string | URL | Request) => {
+    const rawUrl = String(url);
+    if (rawUrl.endsWith("/sendMessage")) {
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
+    }
+    return new Response(JSON.stringify({ ok: false, description: `unexpected ${rawUrl}` }), { status: 404 });
+  }) as typeof fetch;
+}
+
+function insertCompany(slug: string, displayName: string): Company {
+  cleanupCompany(slug);
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO companies(slug, display_name, repo_full_name, repo_dir, setup_phase, is_default, webhook_secret, created_at, updated_at)
+    VALUES(?, ?, ?, ?, 'notifications', 0, 'secret', ?, ?)
+  `).run(slug, displayName, `acme/${slug}`, join(tmpdir(), `aios-${slug}`, "repo"), now, now);
+  const company = getCompanyBySlug(slug);
+  assert.ok(company);
+  return company;
+}
+
+function cleanupCompany(slug: string) {
+  const row = db.prepare("SELECT id FROM companies WHERE slug = ?").get(slug) as { id: number } | undefined;
+  if (!row) return;
+  db.prepare("DELETE FROM telegram_agent_messages WHERE company_id = ?").run(row.id);
+  db.prepare("DELETE FROM claims WHERE company_id = ?").run(row.id);
+  db.prepare("DELETE FROM kv WHERE k LIKE ?").run(`company.${row.id}.%`);
+  db.prepare("DELETE FROM companies WHERE id = ?").run(row.id);
+}

@@ -33,12 +33,14 @@ describe("ownerNotifications", () => {
     await ensureAutomationWorkspace(join(tempRoot, "sample"));
     db.prepare("DELETE FROM owner_notifications").run();
     kvDel("notifications.config");
+    kvDel("company.1.notifications.config");
   });
 
   afterEach(async () => {
     config.repoDir = prevRepoDir;
     db.prepare("DELETE FROM owner_notifications").run();
     kvDel("notifications.config");
+    kvDel("company.1.notifications.config");
     await rm(tempRoot, { recursive: true, force: true });
   });
 

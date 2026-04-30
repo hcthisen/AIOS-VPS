@@ -5,7 +5,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 import { withCompanyContext } from "../company-context";
-import { db, kvSet } from "../db";
+import { db, kvDel, kvSet } from "../db";
 import { getCompanyBySlug, Company } from "./companies";
 import { getTelegramPairingState, setNotificationConfig } from "./notifications";
 import { pollCurrentCompanyTelegramUpdatesOnce, pollTelegramUpdatesOnce } from "./telegramUpdates";
@@ -17,7 +17,7 @@ describe("telegramUpdates", () => {
 
   beforeEach(async () => {
     tempHome = await mkdtemp(join(tmpdir(), "aios-telegram-updates-"));
-    cleanupCompany("telegram-onboarding-test");
+    cleanupTelegramUpdateFixtures();
     const now = Date.now();
     const result = db.prepare(`
       INSERT INTO companies(slug, display_name, repo_full_name, repo_dir, setup_phase, is_default, webhook_secret, created_at, updated_at)
@@ -29,7 +29,7 @@ describe("telegramUpdates", () => {
 
   afterEach(async () => {
     globalThis.fetch = originalFetch;
-    cleanupCompany("telegram-onboarding-test");
+    cleanupTelegramUpdateFixtures();
     await rm(tempHome, { recursive: true, force: true });
     company = null;
   });
@@ -257,4 +257,19 @@ function cleanupCompany(slug: string) {
   db.prepare("DELETE FROM telegram_agent_messages WHERE company_id = ?").run(row.id);
   db.prepare("DELETE FROM kv WHERE k LIKE ?").run(`company.${row.id}.%`);
   db.prepare("DELETE FROM companies WHERE id = ?").run(row.id);
+}
+
+function cleanupTelegramUpdateFixtures() {
+  for (const slug of [
+    "telegram-onboarding-test",
+    "telegram-fail-company",
+    "telegram-ok-company",
+    "telegram-agent-company",
+  ]) {
+    cleanupCompany(slug);
+  }
+  kvDel("company.1.notifications.config");
+  kvDel("company.1.notifications.telegram.pairing");
+  kvDel("notifications.config");
+  kvDel("notifications.telegram.pairing");
 }
