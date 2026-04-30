@@ -45,7 +45,7 @@ const DEFAULT_CONFIG: TelegramAgentConfig = {
 };
 
 let pollTimer: NodeJS.Timeout | null = null;
-let dispatching = false;
+const dispatchingByCompany = new Map<number, Promise<void>>();
 
 function scopedKey(key: string): string {
   return `company.${getCurrentCompanyId()}.${key}`;
@@ -191,11 +191,12 @@ function scheduleDispatch(delayMs: number) {
   pollTimer.unref?.();
 }
 
-async function dispatchLoop() {
+function dispatchLoop() {
   try {
     for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
-      await withCompanyContext(company, async () => {
-        await dispatchTelegramAgentQueue();
+      const dispatch = withCompanyContext(company, () => dispatchTelegramAgentQueue());
+      void dispatch.catch((e: any) => {
+        log.warn(`telegram root agent dispatch failed for ${company.slug}`, e?.message || e);
       });
     }
     scheduleDispatch(2_000);
@@ -223,61 +224,67 @@ export async function processTelegramAgentUpdates(updates: TelegramUpdate[]) {
 }
 
 export async function dispatchTelegramAgentQueue() {
-  if (dispatching) return;
-  dispatching = true;
-  try {
-    while (true) {
-      const config = getTelegramAgentConfig();
-      const notification = getNotificationConfig();
-      if (!config.enabled || notification.channel !== "telegram" || !notification.chatId) return;
-      if (getClaim("_root")) return;
+  const companyId = getCurrentCompanyId();
+  const existing = dispatchingByCompany.get(companyId);
+  if (existing) return;
 
-      const messages = queuedMessages();
-      if (!messages.length) return;
+  const dispatch = doDispatchTelegramAgentQueue().finally(() => {
+    dispatchingByCompany.delete(companyId);
+  });
+  dispatchingByCompany.set(companyId, dispatch);
+  await dispatch;
+}
 
-      const generation = config.resetGeneration;
-      if (!(await isProviderAuthorized(config.provider))) {
-        markMessagesFinished(messages, "failed", config.sessionId, `${displayProvider(config.provider)} is not authorized`);
-        await sendTelegramReply(notification.chatId, `${displayProvider(config.provider)} is not authorized in AIOS. Open Settings and connect or select an authorized operator.`);
-        return;
-      }
-      const prompt = buildTelegramRootPrompt(messages);
-      const result = await startRun({
-        departments: ["_root"],
-        trigger: "telegram:root",
-        prompt,
-        provider: config.provider,
-        queueIfBusy: false,
-        conversation: {
-          source: "telegram",
-          sessionId: config.sessionId,
-        },
-      });
+async function doDispatchTelegramAgentQueue() {
+  while (true) {
+    const config = getTelegramAgentConfig();
+    const notification = getNotificationConfig();
+    if (!config.enabled || notification.channel !== "telegram" || !notification.chatId) return;
+    if (getClaim("_root")) return;
 
-      if (!result.accepted) return;
+    const messages = queuedMessages();
+    if (!messages.length) return;
 
-      markMessagesRunning(messages, result.run.id, config.provider, config.sessionId);
-      const finished = await waitForRunFinished(result.run.id);
-      const latest = getTelegramAgentConfig();
-      if (latest.resetGeneration !== generation) return;
-
-      const run = finished.run;
-      const conversation = finished.conversation;
-      if (run.status === "succeeded" && conversation?.sessionId) {
-        setTelegramAgentConfig({ ...latest, sessionId: conversation.sessionId });
-      }
-
-      if (run.status === "succeeded") {
-        markMessagesFinished(messages, "succeeded", conversation?.sessionId || latest.sessionId, null);
-        await sendTelegramReply(notification.chatId, conversation?.finalMessage || "Done.");
-      } else {
-        const error = run.error || `run ${run.status}`;
-        markMessagesFinished(messages, "failed", latest.sessionId, error);
-        await sendTelegramReply(notification.chatId, `The Root agent did not finish successfully: ${error}`);
-      }
+    const generation = config.resetGeneration;
+    if (!(await isProviderAuthorized(config.provider))) {
+      markMessagesFinished(messages, "failed", config.sessionId, `${displayProvider(config.provider)} is not authorized`);
+      await sendTelegramReply(notification.chatId, `${displayProvider(config.provider)} is not authorized in AIOS. Open Settings and connect or select an authorized operator.`);
+      return;
     }
-  } finally {
-    dispatching = false;
+    const prompt = buildTelegramRootPrompt(messages);
+    const result = await startRun({
+      departments: ["_root"],
+      trigger: "telegram:root",
+      prompt,
+      provider: config.provider,
+      queueIfBusy: false,
+      conversation: {
+        source: "telegram",
+        sessionId: config.sessionId,
+      },
+    });
+
+    if (!result.accepted) return;
+
+    markMessagesRunning(messages, result.run.id, config.provider, config.sessionId);
+    const finished = await waitForRunFinished(result.run.id);
+    const latest = getTelegramAgentConfig();
+    if (latest.resetGeneration !== generation) return;
+
+    const run = finished.run;
+    const conversation = finished.conversation;
+    if (run.status === "succeeded" && conversation?.sessionId) {
+      setTelegramAgentConfig({ ...latest, sessionId: conversation.sessionId });
+    }
+
+    if (run.status === "succeeded") {
+      markMessagesFinished(messages, "succeeded", conversation?.sessionId || latest.sessionId, null);
+      await sendTelegramReply(notification.chatId, conversation?.finalMessage || "Done.");
+    } else {
+      const error = run.error || `run ${run.status}`;
+      markMessagesFinished(messages, "failed", latest.sessionId, error);
+      await sendTelegramReply(notification.chatId, `The Root agent did not finish successfully: ${error}`);
+    }
   }
 }
 

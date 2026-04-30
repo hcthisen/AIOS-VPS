@@ -7,7 +7,7 @@ import {
   telegramApi,
   TelegramUpdate,
 } from "./notifications";
-import { dispatchTelegramAgentQueue, processTelegramAgentUpdates } from "./telegramAgent";
+import { processTelegramAgentUpdates } from "./telegramAgent";
 import { listCompanies } from "./companies";
 import { getCurrentCompanyId, withCompanyContext } from "../company-context";
 
@@ -33,23 +33,29 @@ function schedulePoll(delayMs: number) {
 
 async function pollLoop() {
   try {
-    await pollTelegramUpdatesOnce({ timeout: 20, skipIfBusy: true });
-    schedulePoll(500);
+    const result = await pollTelegramUpdatesOnce({ timeout: 20, skipIfBusy: true });
+    schedulePoll(result.failed ? 5_000 : 500);
   } catch (e: any) {
     log.warn("telegram update poll failed", e?.message || e);
     schedulePoll(5_000);
   }
 }
 
-export async function pollTelegramUpdatesOnce(opts: { timeout?: number; skipIfBusy?: boolean } = {}): Promise<{ polled: boolean }> {
+export async function pollTelegramUpdatesOnce(opts: { timeout?: number; skipIfBusy?: boolean } = {}): Promise<{ polled: boolean; failed: number }> {
   let polled = false;
+  let failed = 0;
   for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
-    await withCompanyContext(company, async () => {
-      const result = await pollCurrentCompanyTelegramUpdatesOnce(opts);
-      polled = polled || result.polled;
-    });
+    try {
+      await withCompanyContext(company, async () => {
+        const result = await pollCurrentCompanyTelegramUpdatesOnce(opts);
+        polled = polled || result.polled;
+      });
+    } catch (e: any) {
+      failed += 1;
+      log.warn(`telegram update poll failed for ${company.slug}`, e?.message || e);
+    }
   }
-  return { polled };
+  return { polled, failed };
 }
 
 export async function pollCurrentCompanyTelegramUpdatesOnce(opts: { timeout?: number; skipIfBusy?: boolean } = {}): Promise<{ polled: boolean }> {
@@ -88,5 +94,4 @@ async function doPollCurrentCompanyTelegramUpdates(timeout: number) {
 
   recordTelegramPairingUpdates(config.botToken, updates);
   await processTelegramAgentUpdates(updates);
-  await dispatchTelegramAgentQueue();
 }
