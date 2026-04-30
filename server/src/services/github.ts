@@ -189,6 +189,36 @@ export async function ensureGitHubPushWebhook(
   };
 }
 
+export async function deleteGitHubPushWebhook(
+  token: string,
+  fullName: string,
+  opts: { baseUrl?: string | null; path?: string } = {},
+): Promise<{ ok: true; url: string; deleted: boolean; hookId: number | null } | { ok: false; url?: string; error: string }> {
+  const baseUrl = String(typeof opts.baseUrl === "undefined" ? await defaultWebhookBaseUrl() : opts.baseUrl || "").trim().replace(/\/+$/, "");
+  const webhookPath = opts.path || "/github/webhook";
+  if (!baseUrl) return { ok: false, error: "public AIOS base URL is not configured" };
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return { ok: false, url: `${baseUrl}${webhookPath}`, error: "invalid GitHub repo full name" };
+
+  const url = `${baseUrl}${webhookPath}`;
+  const encodedFullName = fullName.split("/").map(encodeURIComponent).join("/");
+  const hooksResponse = await ghFetch(`/repos/${encodedFullName}/hooks?per_page=100`, token);
+  if (!hooksResponse.ok) {
+    const text = await hooksResponse.text().catch(() => "");
+    return { ok: false, url, error: `github hooks list failed (${hooksResponse.status}): ${text.slice(0, 200)}` };
+  }
+
+  const hooks = await hooksResponse.json() as Array<{ id?: number; config?: { url?: string } }>;
+  const existing = hooks.find((hook) => hook.config?.url === url);
+  if (!existing?.id) return { ok: true, url, deleted: false, hookId: null };
+
+  const response = await ghFetch(`/repos/${encodedFullName}/hooks/${existing.id}`, token, { method: "DELETE" });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    return { ok: false, url, error: `github webhook delete failed (${response.status}): ${text.slice(0, 200)}` };
+  }
+  return { ok: true, url, deleted: true, hookId: existing.id };
+}
+
 export function cloneUrlWithPat(cloneUrl: string, username: string, token: string): string {
   // https://github.com/foo/bar.git → https://<user>:<token>@github.com/foo/bar.git
   return cloneUrl.replace(/^https:\/\//, `https://${encodeURIComponent(username)}:${encodeURIComponent(token)}@`);

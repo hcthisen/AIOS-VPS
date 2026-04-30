@@ -1,15 +1,17 @@
-import { Router, badRequest, notFound } from "../http";
+import { Router, badRequest, conflict, notFound } from "../http";
 import { adminOnly } from "../auth";
 import { db } from "../db";
 import { withCompanyContext } from "../company-context";
 import {
   createCompany,
+  deleteCompany,
   getCompanyBySlug,
   listCompanies,
   listConnectedRepoFullNames,
   setCompanySetupPhase,
 } from "../services/companies";
-import { getGithubCreds, listRepos, ensureGitHubPushWebhook } from "../services/github";
+import { activeProcessCount } from "../services/executor";
+import { getGithubCreds, listRepos, ensureGitHubPushWebhook, deleteGitHubPushWebhook } from "../services/github";
 import { cloneRepo, readRepoContext, validateAiosRepo, writeRepoContext } from "../services/repo";
 import { runSyncLayer } from "../services/sync";
 import {
@@ -82,6 +84,36 @@ export function registerCompanyRoutes(router: Router) {
         setupPhase: "context_setup",
       },
     }, 201);
+  });
+
+  router.delete("/api/companies/:slug", async (req, res) => {
+    await guard(req, res);
+    const company = mustCompany(req.params.slug);
+    if (company.isDefault) throw badRequest("default company cannot be removed");
+
+    const active = withCompanyContext(company, () => activeProcessCount());
+    if (active > 0) throw conflict("company has active runs");
+
+    const creds = getGithubCreds();
+    const webhook = creds?.token && company.repoFullName
+      ? await deleteGitHubPushWebhook(creds.token, company.repoFullName, { path: `/github/webhook/${company.slug}` }).catch((e: any) => ({
+        ok: false,
+        error: String(e?.message || e),
+      }))
+      : null;
+    const removed = await deleteCompany(company);
+
+    res.json({
+      ok: true,
+      company: {
+        id: company.id,
+        slug: company.slug,
+        displayName: company.displayName,
+        repoFullName: company.repoFullName,
+      },
+      removed,
+      webhook,
+    });
   });
 
   router.get("/api/companies/:slug/context", async (req, res) => {

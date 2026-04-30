@@ -265,6 +265,6 @@ function Page({ path, navigate, me, refresh, refreshCompanies }: { path: string;
   if (path === "/webhooks") return <WebhooksPage navigate={navigate} />;
   if (path === "/usage") return <UsagePage />;
   if (path === "/terminal") return <TerminalPage />;
-  if (path === "/settings") return <SettingsPage />;
+  if (path === "/settings") return <SettingsPage onCompaniesChanged={refreshCompanies} />;
   return <div><h2>Not found</h2><a onClick={() => navigate("/")}>Back</a></div>;
 }

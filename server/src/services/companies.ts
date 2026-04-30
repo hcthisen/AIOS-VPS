@@ -1,4 +1,5 @@
-import { join } from "path";
+import { rm } from "fs/promises";
+import { join, resolve, sep } from "path";
 import { randomBytes } from "crypto";
 
 import { config } from "../config";
@@ -108,6 +109,28 @@ export function createCompany(input: {
   return getCompanyById(Number(result.lastInsertRowid))!;
 }
 
+export async function deleteCompany(company: Company): Promise<{
+  repoDir: string;
+  repoRemoved: boolean;
+  repoRemoveError?: string;
+}> {
+  if (company.isDefault) throw new Error("default company cannot be removed");
+
+  deleteCompanyRows(company.id);
+
+  const repoDir = company.repoDir;
+  if (!isCompanyRepoDir(repoDir)) {
+    return { repoDir, repoRemoved: false, repoRemoveError: "repo directory is outside the managed companies folder" };
+  }
+
+  try {
+    await rm(repoDir, { recursive: true, force: true });
+    return { repoDir, repoRemoved: true };
+  } catch (e: any) {
+    return { repoDir, repoRemoved: false, repoRemoveError: String(e?.message || e) };
+  }
+}
+
 export function updateDefaultCompanyRepo(fullName: string | null) {
   const company = getDefaultCompany();
   db.prepare("UPDATE companies SET repo_full_name = ?, updated_at = ? WHERE id = ?")
@@ -140,4 +163,30 @@ function uniqueSlug(base: string): string {
     i += 1;
   }
   return slug;
+}
+
+const COMPANY_SCOPED_TABLES = [
+  "runs",
+  "claims",
+  "backlog",
+  "webhook_deliveries",
+  "usage",
+  "cron_state",
+  "goal_state",
+  "telegram_agent_messages",
+  "owner_notifications",
+] as const;
+
+const deleteCompanyRows = db.transaction((companyId: number) => {
+  for (const table of COMPANY_SCOPED_TABLES) {
+    db.prepare(`DELETE FROM ${table} WHERE company_id = ?`).run(companyId);
+  }
+  db.prepare("DELETE FROM kv WHERE k LIKE ?").run(`company.${companyId}.%`);
+  db.prepare("DELETE FROM companies WHERE id = ? AND is_default = 0").run(companyId);
+});
+
+function isCompanyRepoDir(repoDir: string): boolean {
+  const reposRoot = resolve(config.dataDir, "repos");
+  const target = resolve(repoDir);
+  return target.startsWith(`${reposRoot}${sep}`);
 }

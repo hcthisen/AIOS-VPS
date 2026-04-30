@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 
-import { api } from "../api";
+import { api, getActiveCompanySlug } from "../api";
+import { Banner } from "../components/Banner";
 import { Section } from "../components/Section";
 import { SystemUpdatePanel } from "../components/SystemUpdatePanel";
 import { TelegramAgentPanel } from "../components/TelegramAgentPanel";
@@ -9,7 +10,16 @@ import { GithubSetup } from "./GithubSetup";
 import { NotificationsSetup } from "./NotificationsSetup";
 import { formatFixedOffsetTime } from "../components/ServerClock";
 
-export function SettingsPage() {
+interface Company {
+  id: number;
+  slug: string;
+  displayName: string;
+  repoFullName: string | null;
+  setupPhase: string;
+  isDefault: boolean;
+}
+
+export function SettingsPage({ onCompaniesChanged }: { onCompaniesChanged: () => Promise<void> }) {
   const [controls, setControls] = useState<any>(null);
   const [syncResult, setSyncResult] = useState<any>(null);
 
@@ -39,6 +49,8 @@ export function SettingsPage() {
 
       <TelegramAgentPanel />
 
+      <CompaniesSettings onChanged={onCompaniesChanged} />
+
       <Section
         title="Controls"
         description={`heartbeat ${controls?.heartbeat?.running ? "on" : "off"} · active processes ${controls?.activeProcesses ?? 0} · paused: ${String(!!controls?.paused)}`}
@@ -63,6 +75,82 @@ export function SettingsPage() {
         {syncResult && <pre className="log small">{JSON.stringify(syncResult, null, 2)}</pre>}
       </Section>
     </div>
+  );
+}
+
+function CompaniesSettings({ onChanged }: { onChanged: () => Promise<void> }) {
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [busySlug, setBusySlug] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const activeSlug = getActiveCompanySlug();
+
+  const load = async () => {
+    const result = await api<{ companies: Company[] }>("/api/companies");
+    setCompanies(result.companies || []);
+  };
+
+  useEffect(() => { load().catch((e) => setError(e.message)); }, []);
+
+  const removeCompany = async (company: Company) => {
+    const confirmed = window.confirm(
+      `Remove ${company.displayName}? This removes its AIOS data and local cloned repo from this VPS. The GitHub repository itself is not deleted.`,
+    );
+    if (!confirmed) return;
+
+    setBusySlug(company.slug);
+    setError(null);
+    try {
+      await api(`/api/companies/${encodeURIComponent(company.slug)}`, { method: "DELETE" });
+      await load();
+      await onChanged();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusySlug(null);
+    }
+  };
+
+  return (
+    <Section
+      title="Companies"
+      description="Remove connected companies from this VPS. The GitHub repository remains on GitHub and can be attached again later."
+    >
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Company</th>
+              <th>Repository</th>
+              <th>Status</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {companies.map((company) => (
+              <tr key={company.slug}>
+                <td>
+                  <b>{company.displayName}</b>
+                  {company.slug === activeSlug ? <span className="badge ok" style={{ marginLeft: 8 }}>active</span> : null}
+                </td>
+                <td className="small muted">{company.repoFullName || "not connected"}</td>
+                <td className="small muted">{company.isDefault ? "default" : company.setupPhase}</td>
+                <td style={{ textAlign: "right" }}>
+                  <button
+                    className="icon-btn danger"
+                    onClick={() => removeCompany(company)}
+                    disabled={company.isDefault || busySlug === company.slug}
+                    title={company.isDefault ? "The default company cannot be removed" : "Remove company"}
+                  >
+                    {busySlug === company.slug ? "Removing..." : "Remove"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {error ? <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner> : null}
+    </Section>
   );
 }
 

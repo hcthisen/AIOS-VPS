@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import { strict as assert } from "node:assert";
 
-import { ensureGitHubPushWebhook, parseGitHubFullNameFromRemote } from "./github";
+import { deleteGitHubPushWebhook, ensureGitHubPushWebhook, parseGitHubFullNameFromRemote } from "./github";
 
 describe("github webhook setup", () => {
   const originalFetch = globalThis.fetch;
@@ -63,5 +63,33 @@ describe("github webhook setup", () => {
     assert.equal(result.ok, true);
     assert.equal(result.ok ? result.action : "", "updated");
     assert.deepEqual(methods, ["GET", "PATCH"]);
+  });
+
+  it("deletes an existing webhook for the same receiver URL", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), method: String(init?.method || "GET") });
+      if (String(url).endsWith("/hooks?per_page=100")) {
+        return new Response(JSON.stringify([
+          { id: 111, config: { url: "https://other.example.test/github/webhook" } },
+          { id: 222, config: { url: "https://aios.example.test/github/webhook/acme" } },
+        ]), { status: 200 });
+      }
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    const result = await deleteGitHubPushWebhook("pat-token", "acme/ops", {
+      baseUrl: "https://aios.example.test",
+      path: "/github/webhook/acme",
+    });
+
+    assert.deepEqual(result, {
+      ok: true,
+      url: "https://aios.example.test/github/webhook/acme",
+      deleted: true,
+      hookId: 222,
+    });
+    assert.deepEqual(calls.map((call) => call.method), ["GET", "DELETE"]);
+    assert.equal(calls[1].url, "https://api.github.com/repos/acme/ops/hooks/222");
   });
 });
