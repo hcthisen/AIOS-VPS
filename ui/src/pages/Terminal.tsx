@@ -19,11 +19,34 @@ export function TerminalPage() {
     const qs = company ? `?company=${encodeURIComponent(company)}` : "";
     const ws = new WebSocket(`${proto}//${window.location.host}/api/terminal${qs}`);
     ws.onmessage = (e) => { try { const p = JSON.parse(e.data); if (p.t === "data") term.write(p.d); } catch {} };
-    term.onData((d) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "data", d })));
+    const sendData = (d: string) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "data", d }));
+    term.onData(sendData);
     term.onResize(({ cols, rows }) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "resize", cols, rows })));
     const onResize = () => fit.fit();
+    const pasteClipboard = async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text) return;
+        sendData(text.replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
+      } catch {
+        // Browser clipboard access can be blocked outside a user gesture or
+        // insecure context. Native paste still has a chance to work.
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isPaste = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v";
+      if (!isPaste) return;
+      event.preventDefault();
+      pasteClipboard();
+    };
     window.addEventListener("resize", onResize);
-    return () => { window.removeEventListener("resize", onResize); ws.close(); term.dispose(); };
+    term.element?.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      term.element?.removeEventListener("keydown", onKeyDown);
+      ws.close();
+      term.dispose();
+    };
   }, []);
   return (
     <div className="col" style={{ height: "calc(100vh - var(--chrome-h) - 48px)" }}>
