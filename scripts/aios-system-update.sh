@@ -160,6 +160,8 @@ else
   log_line "Fetching ${REPO_URL} (${BRANCH})"
   run_logged git -C "${SOURCE_DIR}" remote set-url origin "${PERSISTED_REMOTE_URL}" || fail "failed to set updater remote"
   run_logged git -C "${SOURCE_DIR}" fetch --prune origin "${BRANCH}" || fail "git fetch failed"
+  run_logged git -C "${SOURCE_DIR}" reset --hard || fail "failed to discard local updater checkout changes"
+  run_logged git -C "${SOURCE_DIR}" clean -fdx || fail "failed to clean local updater checkout changes"
   run_logged git -C "${SOURCE_DIR}" checkout -B "${BRANCH}" "origin/${BRANCH}" || fail "failed to checkout ${BRANCH}"
   run_logged git -C "${SOURCE_DIR}" reset --hard "origin/${BRANCH}" || fail "failed to reset updater checkout"
   run_logged git -C "${SOURCE_DIR}" clean -fdx || fail "failed to clean updater checkout"

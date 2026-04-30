@@ -6,6 +6,7 @@ npm-debug.log*
 # Builds
 server/dist/
 ui/dist/
+*.tsbuildinfo
 
 # Local state
 data/

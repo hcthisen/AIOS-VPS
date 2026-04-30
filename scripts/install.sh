@@ -31,6 +31,8 @@ mkdir -p "$(dirname "${AIOS_SOURCE_DIR}")"
 if [[ -d "${AIOS_SOURCE_DIR}/.git" ]]; then
   git -C "${AIOS_SOURCE_DIR}" remote set-url origin "${AIOS_SOURCE_REPO_URL}" || true
   git -C "${AIOS_SOURCE_DIR}" fetch --prune origin "${AIOS_SOURCE_BRANCH}"
+  git -C "${AIOS_SOURCE_DIR}" reset --hard
+  git -C "${AIOS_SOURCE_DIR}" clean -fdx
   git -C "${AIOS_SOURCE_DIR}" checkout -B "${AIOS_SOURCE_BRANCH}" "origin/${AIOS_SOURCE_BRANCH}"
   git -C "${AIOS_SOURCE_DIR}" reset --hard "origin/${AIOS_SOURCE_BRANCH}"
   git -C "${AIOS_SOURCE_DIR}" clean -fdx
