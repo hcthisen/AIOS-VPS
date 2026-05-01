@@ -52,6 +52,13 @@ button.flash-ok {
 }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 input, textarea, select { width: 100%; }
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
 textarea { min-height: 120px; resize: vertical; }
 
 /* Icon button: a real <button> styled like an inline action */

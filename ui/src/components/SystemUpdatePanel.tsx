@@ -12,6 +12,10 @@ function formatTime(value?: number | null) {
   return value ? new Date(value).toLocaleString() : "never";
 }
 
+function isTransientStatusError(message: string) {
+  return /\/api\/settings\/system-update\/status.*\b(502|503|504)\b/.test(message);
+}
+
 export function SystemUpdatePanel() {
   const [status, setStatus] = useState<any>(null);
   const [repoUrl, setRepoUrl] = useState("");
@@ -20,13 +24,16 @@ export function SystemUpdatePanel() {
   const [working, setWorking] = useState<"save" | "check" | "update" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = async () => {
+  const refresh = async (opts: { quietTransient?: boolean } = {}) => {
     try {
       const next = await api("/api/settings/system-update/status");
       setStatus(next);
+      setError((current) => current && isTransientStatusError(current) ? null : current);
       window.dispatchEvent(new CustomEvent("aios-system-update-status", { detail: next }));
     } catch (e: any) {
-      setError(e.message);
+      const message = String(e?.message || e);
+      if (opts.quietTransient && isTransientStatusError(message)) return;
+      setError(message);
     }
   };
 
@@ -44,7 +51,7 @@ export function SystemUpdatePanel() {
 
   useEffect(() => {
     if (!status?.state?.inProgress) return;
-    const timer = window.setInterval(refresh, 3000);
+    const timer = window.setInterval(() => refresh({ quietTransient: true }), 3000);
     return () => window.clearInterval(timer);
   }, [status?.state?.inProgress]);
 
@@ -86,7 +93,7 @@ export function SystemUpdatePanel() {
     setError(null);
     try {
       await api("/api/settings/system-update/start", { method: "POST" });
-      await refresh();
+      await refresh({ quietTransient: true });
     } catch (e: any) {
       setError(e.message);
     } finally {
