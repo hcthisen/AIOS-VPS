@@ -3,10 +3,12 @@ import { Readable } from "stream";
 
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 
+import { CompanyContext, getCurrentCompanyContext, withCompanyContext } from "../company-context";
 import { config } from "../config";
 import { AiosRequest, AiosResponse } from "../http";
 import { log } from "../log";
 import { detectPublicIp, isIpv4Address, managedHostForPublicBaseUrl, resolveIpv4Addresses, syncManagedCaddy } from "./caddy";
+import { listCompanies } from "./companies";
 import { listDepartments } from "./departments";
 import {
   FriendlyError,
@@ -31,11 +33,13 @@ export interface PublicBaseUrlProbeResult {
 }
 
 interface PublicCandidate {
+  company: CompanyContext | null;
   deptName: string;
   cfg: StorageConfig;
 }
 
 interface PublicMatch {
+  company: CompanyContext | null;
   deptName: string;
   cfg: StorageConfig;
   key: string;
@@ -45,6 +49,14 @@ interface PublicMatch {
 
 const temporaryPublicConfigs = new Map<string, StorageConfig>();
 const RESERVED_DASHBOARD_PREFIXES = ["", "/api", "/assets", "/setup", "/departments", "/runs", "/webhooks"];
+
+function temporaryConfigKey(company: CompanyContext | null, deptName: string): string {
+  return `${company?.id || 1}:${deptName}`;
+}
+
+function currentCompany(): CompanyContext | null {
+  return getCurrentCompanyContext();
+}
 
 function normalizeHostHeader(hostHeader: string | undefined): string {
   const raw = String(hostHeader || "").trim().toLowerCase();
@@ -102,19 +114,48 @@ function publicBaseUrlIdentity(baseUrl: string): string {
   return `${normalizeHostHeader(normalizedBaseHost(baseUrl))}${basePath}`;
 }
 
-async function publicCandidates(): Promise<PublicCandidate[]> {
+function allKnownCompanies(): CompanyContext[] {
+  const companies: CompanyContext[] = [...listCompanies()];
+  const current = currentCompany();
+  if (current && !companies.some((company) => company.id === current.id)) {
+    companies.push(current);
+  }
+  return companies;
+}
+
+async function publicCandidatesForCompany(company: CompanyContext): Promise<PublicCandidate[]> {
+  return withCompanyContext(company, async () => {
+    const depts = await listDepartments();
+    const out: PublicCandidate[] = [];
+    for (const dept of depts) {
+      const override = temporaryPublicConfigs.get(temporaryConfigKey(company, dept.name));
+      const cfg = override || await readStorageConfig(dept.name).catch(() => null);
+      if (!cfg?.publicBaseUrl) continue;
+      out.push({ company, deptName: dept.name, cfg });
+    }
+    return out;
+  });
+}
+
+export async function publicCandidates(): Promise<PublicCandidate[]> {
+  const companies = allKnownCompanies();
+  if (companies.length) {
+    const nested = await Promise.all(companies.map((company) => publicCandidatesForCompany(company)));
+    return nested.flat();
+  }
+
   const depts = await listDepartments();
   const out: PublicCandidate[] = [];
   for (const dept of depts) {
-    const override = temporaryPublicConfigs.get(dept.name);
+    const override = temporaryPublicConfigs.get(temporaryConfigKey(null, dept.name));
     const cfg = override || await readStorageConfig(dept.name).catch(() => null);
     if (!cfg?.publicBaseUrl) continue;
-    out.push({ deptName: dept.name, cfg });
+    out.push({ company: null, deptName: dept.name, cfg });
   }
   return out;
 }
 
-async function findPublicMatch(hostHeader: string | undefined, requestPath: string): Promise<PublicMatch | null> {
+export async function findPublicMatch(hostHeader: string | undefined, requestPath: string): Promise<PublicMatch | null> {
   const candidates = await publicCandidates();
   let best: PublicMatch | null = null;
   for (const candidate of candidates) {
@@ -127,6 +168,7 @@ async function findPublicMatch(hostHeader: string | undefined, requestPath: stri
     if (!url) continue;
     if (!best || matched.specificity > best.specificity) {
       best = {
+        company: candidate.company,
         deptName: candidate.deptName,
         cfg: candidate.cfg,
         key,
@@ -154,24 +196,29 @@ async function shouldTreatAsPublicMiss(hostHeader: string | undefined, requestPa
 }
 
 async function withTemporaryPublicConfig<T>(deptName: string, cfg: StorageConfig, fn: () => Promise<T>): Promise<T> {
-  const prev = temporaryPublicConfigs.get(deptName);
-  temporaryPublicConfigs.set(deptName, cfg);
+  const company = currentCompany();
+  const key = temporaryConfigKey(company, deptName);
+  const prev = temporaryPublicConfigs.get(key);
+  temporaryPublicConfigs.set(key, cfg);
   try {
     return await fn();
   } finally {
-    if (prev) temporaryPublicConfigs.set(deptName, prev);
-    else temporaryPublicConfigs.delete(deptName);
+    if (prev) temporaryPublicConfigs.set(key, prev);
+    else temporaryPublicConfigs.delete(key);
   }
 }
 
 async function findPublicBaseUrlConflict(deptName: string, baseUrl: string): Promise<string | null> {
   const identity = publicBaseUrlIdentity(baseUrl);
-  const depts = await listDepartments();
-  for (const dept of depts) {
-    if (dept.name === deptName) continue;
-    const cfg = temporaryPublicConfigs.get(dept.name) || await readStorageConfig(dept.name).catch(() => null);
-    if (!cfg?.publicBaseUrl) continue;
-    if (publicBaseUrlIdentity(cfg.publicBaseUrl) === identity) return dept.name;
+  const company = currentCompany();
+  const currentCompanyId = company?.id || 1;
+  const candidates = await publicCandidates();
+  for (const candidate of candidates) {
+    const candidateCompanyId = candidate.company?.id || 1;
+    if (candidateCompanyId === currentCompanyId && candidate.deptName === deptName) continue;
+    if (publicBaseUrlIdentity(candidate.cfg.publicBaseUrl) !== identity) continue;
+    const companyLabel = candidate.company?.displayName || candidate.company?.slug;
+    return companyLabel ? `${candidate.deptName} (${companyLabel})` : candidate.deptName;
   }
   return null;
 }

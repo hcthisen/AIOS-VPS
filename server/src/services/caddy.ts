@@ -4,8 +4,10 @@ import { promisify } from "util";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname } from "path";
 
+import { withCompanyContext } from "../company-context";
 import { config } from "../config";
 import { log } from "../log";
+import { listCompanies } from "./companies";
 import { listDepartments } from "./departments";
 import { readStorageConfig } from "./storageConfig";
 
@@ -79,14 +81,20 @@ export async function managedHostForPublicBaseUrl(baseUrl: string): Promise<stri
 }
 
 async function managedStorageHosts(): Promise<string[]> {
-  const depts = await listDepartments();
   const hosts = new Set<string>();
-  for (const dept of depts) {
-    const cfg = await readStorageConfig(dept.name).catch(() => null);
-    if (!cfg?.publicBaseUrl) continue;
-    const host = await managedHostForPublicBaseUrl(cfg.publicBaseUrl).catch(() => null);
-    if (host) hosts.add(host);
+
+  for (const company of listCompanies()) {
+    await withCompanyContext(company, async () => {
+      const depts = await listDepartments();
+      for (const dept of depts) {
+        const cfg = await readStorageConfig(dept.name).catch(() => null);
+        if (!cfg?.publicBaseUrl) continue;
+        const host = await managedHostForPublicBaseUrl(cfg.publicBaseUrl).catch(() => null);
+        if (host) hosts.add(host);
+      }
+    });
   }
+
   return [...hosts];
 }
 
