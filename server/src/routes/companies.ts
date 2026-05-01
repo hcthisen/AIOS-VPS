@@ -12,8 +12,8 @@ import {
   setCompanySetupPhase,
 } from "../services/companies";
 import { activeProcessCount } from "../services/executor";
-import { getGithubCreds, listRepos, ensureGitHubPushWebhook, deleteGitHubPushWebhook } from "../services/github";
-import { cloneRepo, readRepoContext, validateAiosRepo, writeRepoContext } from "../services/repo";
+import { getGithubCreds, listRepos, ensureGitHubPushWebhook, deleteGitHubPushWebhook, createRepo } from "../services/github";
+import { cloneRepo, readRepoContext, validateAiosRepo, writeRepoContext, scaffoldRepo, gitRun } from "../services/repo";
 import { runSyncLayer } from "../services/sync";
 import {
   approveTelegramPairing,
@@ -56,14 +56,20 @@ export function registerCompanyRoutes(router: Router) {
     await guard(req, res);
     const creds = getGithubCreds();
     if (!creds?.token || !creds.username) throw badRequest("adding companies requires the existing GitHub PAT connection");
-    const fullName = String(req.body?.fullName || "").trim();
+    const mode = String(req.body?.mode || "attach");
+    const fullName = mode === "create" ? await createCompanyRepo(req.body || {}, creds) : String(req.body?.fullName || "").trim();
     if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) throw badRequest("invalid fullName");
-    const displayName = String(req.body?.displayName || fullName.split("/")[1] || fullName).trim();
+    const repoName = fullName.split("/")[1] || fullName;
+    const displayName = String(req.body?.displayName || repoName).trim();
     const company = createCompany({ displayName, slug: req.body?.slug, repoFullName: fullName });
     try {
       await withCompanyContext(company, async () => {
         const clone = await cloneRepo({ cloneUrl: `https://github.com/${fullName}.git`, creds });
         if (!clone.ok) throw badRequest(`clone failed: ${clone.error}`);
+        if (mode === "create") {
+          await scaffoldRepo(company.repoDir, { name: displayName });
+          await commitAndPushScaffold(creds.username!, company.repoDir);
+        }
         const validation = await validateAiosRepo(company.repoDir);
         if (!validation.ok) throw badRequest(validation.error || "validation failed");
         await ensureGitHubPushWebhook(creds.token!, fullName, {
@@ -215,6 +221,29 @@ export function registerCompanyRoutes(router: Router) {
       res.json(await sendNotification("AIOS test notification", "AIOS test"));
     });
   });
+}
+
+async function createCompanyRepo(body: any, creds: { token?: string; username?: string }): Promise<string> {
+  const name = String(body?.name || "").trim();
+  if (!/^[\w.-]{1,100}$/.test(name)) throw badRequest("invalid repo name");
+  const result = await createRepo(creds.token!, {
+    name,
+    private: body?.private ?? true,
+    description: "AIOS-managed company repo",
+  });
+  if (!result.ok) throw badRequest(`github create failed: ${result.error}`);
+  return result.fullName;
+}
+
+async function commitAndPushScaffold(username: string, repoDir: string): Promise<void> {
+  try {
+    await gitRun(["config", "user.email", `${username}@users.noreply.github.com`], repoDir);
+    await gitRun(["config", "user.name", username], repoDir);
+    await gitRun(["add", "-A"], repoDir);
+    await gitRun(["commit", "-m", "aios: scaffold"], repoDir);
+    await gitRun(["push", "origin", "HEAD"], repoDir);
+  } catch {
+  }
 }
 
 function mustCompany(slug: string) {

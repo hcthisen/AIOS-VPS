@@ -18,31 +18,44 @@ export function AddCompanyPage({
   onChanged: () => Promise<void>;
 }) {
   const [step, setStep] = useState<"repo" | "context" | "notifications">("repo");
+  const [mode, setMode] = useState<"create" | "attach">("create");
   const [repos, setRepos] = useState<RepoOption[]>([]);
   const [fullName, setFullName] = useState("");
+  const [repoName, setRepoName] = useState("aios-company");
+  const [isPrivate, setIsPrivate] = useState(true);
   const [displayName, setDisplayName] = useState("");
+  const [displayNameTouched, setDisplayNameTouched] = useState(false);
   const [companySlug, setCompanySlug] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (mode !== "attach" || repos.length > 0) return;
     api<{ repos: RepoOption[] }>("/api/companies/github/repos")
       .then((r) => setRepos(r.repos || []))
       .catch((e) => setError(e.message));
-  }, []);
+  }, [mode, repos.length]);
 
   useEffect(() => {
-    if (!fullName || displayName) return;
-    setDisplayName(fullName.split("/")[1] || fullName);
-  }, [fullName]);
+    if (displayNameTouched) return;
+    if (mode === "create") {
+      setDisplayName(repoName);
+      return;
+    }
+    if (fullName) setDisplayName(fullName.split("/")[1] || fullName);
+  }, [mode, repoName, fullName, displayNameTouched]);
 
-  const attach = async () => {
+  const save = async () => {
     setBusy(true);
     setError(null);
     try {
       const result = await api<{ company: { slug: string; displayName: string } }>("/api/companies", {
         method: "POST",
-        body: JSON.stringify({ fullName, displayName }),
+        body: JSON.stringify(
+          mode === "create"
+            ? { mode, name: repoName, private: isPrivate, displayName }
+            : { mode, fullName, displayName },
+        ),
       });
       setCompanySlug(result.company.slug);
       setActiveCompanySlug(result.company.slug);
@@ -88,25 +101,52 @@ export function AddCompanyPage({
   return (
     <div className="col narrow">
       <h2>Add company</h2>
-      <Section title="Choose repo" description="Select an AIOS repo from the connected GitHub account. Already connected repos are hidden.">
-        <label className="col">
-          <span className="small muted">Repository</span>
-          <select value={fullName} onChange={(e) => setFullName(e.target.value)}>
-            <option value="">-- pick a repo --</option>
-            {repos.map((repo) => (
-              <option key={repo.fullName} value={repo.fullName}>
-                {repo.fullName}{repo.private ? " (private)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+      <Section title="Create new company" description="Create a fresh AIOS repo in the connected GitHub account, or attach an existing AIOS repo.">
+        <div className="row">
+          <label className="row" style={{ gap: 6 }}>
+            <input type="radio" checked={mode === "create"} onChange={() => setMode("create")} style={{ width: "auto", minHeight: 0 }} /> Create new company
+          </label>
+          <label className="row" style={{ gap: 6 }}>
+            <input type="radio" checked={mode === "attach"} onChange={() => setMode("attach")} style={{ width: "auto", minHeight: 0 }} /> Attach existing repo
+          </label>
+        </div>
+        {mode === "create" && (
+          <div className="col">
+            <label className="col">
+              <span className="small muted">Repository name</span>
+              <input value={repoName} onChange={(e) => setRepoName(e.target.value)} placeholder="repo name" />
+            </label>
+            <label className="small"><input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} /> private</label>
+            <p className="small muted">AIOS will create the repo on GitHub, clone it locally, and scaffold the company workspace.</p>
+          </div>
+        )}
+        {mode === "attach" && (
+          <label className="col">
+            <span className="small muted">Repository</span>
+            <select value={fullName} onChange={(e) => setFullName(e.target.value)}>
+              <option value="">-- pick a repo --</option>
+              {repos.map((repo) => (
+                <option key={repo.fullName} value={repo.fullName}>
+                  {repo.fullName}{repo.private ? " (private)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="col">
           <span className="small muted">Company name</span>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Company name" />
+          <input
+            value={displayName}
+            onChange={(e) => {
+              setDisplayNameTouched(true);
+              setDisplayName(e.target.value);
+            }}
+            placeholder="Company name"
+          />
         </label>
         <div className="row">
-          <button className="primary" onClick={attach} disabled={busy || !fullName || !displayName.trim()}>
-            {busy ? "Attaching..." : "Attach repo"}
+          <button className="primary" onClick={save} disabled={busy || !displayName.trim() || (mode === "create" ? !repoName.trim() : !fullName)}>
+            {busy ? "Working..." : mode === "create" ? "Create company" : "Attach repo"}
           </button>
           <button className="ghost" onClick={() => navigate("/")}>Cancel</button>
         </div>
