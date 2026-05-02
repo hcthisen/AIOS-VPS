@@ -8,6 +8,7 @@ import { TelegramAgentPanel } from "../components/TelegramAgentPanel";
 import { ProviderAuth } from "./ProviderAuth";
 import { GithubSetup } from "./GithubSetup";
 import { NotificationsSetup } from "./NotificationsSetup";
+import { ContextSetup } from "./ContextSetup";
 import { formatFixedOffsetTime } from "../components/ServerClock";
 
 interface Company {
@@ -45,6 +46,8 @@ export function SettingsPage({ onCompaniesChanged }: { onCompaniesChanged: () =>
 
       <GithubSetup mode="settings" basePath="/api/settings/github" />
 
+      <CompanyContextSettings />
+
       <NotificationsSetup mode="settings" basePath="/api/settings/notifications" />
 
       <TelegramAgentPanel />
@@ -75,6 +78,44 @@ export function SettingsPage({ onCompaniesChanged }: { onCompaniesChanged: () =>
         {syncResult && <pre className="log small">{JSON.stringify(syncResult, null, 2)}</pre>}
       </Section>
     </div>
+  );
+}
+
+function CompanyContextSettings() {
+  const [editing, setEditing] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const activeSlug = getActiveCompanySlug();
+
+  if (!activeSlug) {
+    return (
+      <Section title="Company context" description="Select a company before editing its repository context." />
+    );
+  }
+
+  if (!editing) {
+    return (
+      <Section
+        title="Company context"
+        description="Update the active company's root organization context and sync it into department instructions."
+        actions={savedAt ? <span className="small muted">Saved {new Date(savedAt).toLocaleTimeString()}</span> : null}
+      >
+        <button onClick={() => setEditing(true)}>Edit context</button>
+      </Section>
+    );
+  }
+
+  return (
+    <ContextSetup
+      title="Company context"
+      description="Update the active company's root organization context and sync it into department instructions."
+      basePath={`/api/companies/${encodeURIComponent(activeSlug)}/context`}
+      savePath={`/api/companies/${encodeURIComponent(activeSlug)}/context`}
+      submitLabel="Save context"
+      onAdvance={async () => {
+        setSavedAt(Date.now());
+        setEditing(false);
+      }}
+    />
   );
 }
 

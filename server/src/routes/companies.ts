@@ -171,8 +171,9 @@ export function registerCompanyRoutes(router: Router) {
       });
       await runSyncLayer({ commit: false });
     });
-    setCompanySetupPhase(company.id, "notifications");
-    res.json({ ok: true, setupPhase: "notifications" });
+    const setupPhase = company.setupPhase === "context_setup" ? "notifications" : company.setupPhase;
+    if (setupPhase !== company.setupPhase) setCompanySetupPhase(company.id, setupPhase);
+    res.json({ ok: true, setupPhase });
   });
 
   router.post("/api/companies/:slug/complete", async (req, res) => {

@@ -58,7 +58,6 @@ export function AddCompanyPage({
         ),
       });
       setCompanySlug(result.company.slug);
-      setActiveCompanySlug(result.company.slug);
       await onChanged();
       setStep("context");
     } catch (e: any) {
@@ -90,6 +89,7 @@ export function AddCompanyPage({
           basePath={`/api/companies/${encodeURIComponent(companySlug)}/notifications`}
           onAdvance={async () => {
             await api(`/api/companies/${encodeURIComponent(companySlug)}/complete`, { method: "POST" });
+            setActiveCompanySlug(companySlug);
             await onChanged();
             navigate("/");
           }}

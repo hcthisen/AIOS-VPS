@@ -25,10 +25,16 @@ export function ContextSetup({
   onAdvance,
   basePath = "/api/onboarding/context",
   savePath = "/api/onboarding/context/save",
+  title = "Shared context",
+  description = <>This step defines the organization and deployment scope for the whole repository. AIOS writes the root <code>org.md</code> plus the root <code>CLAUDE.md</code> and <code>AGENTS.md</code>, then syncs shared context into each department.</>,
+  submitLabel = "Save context",
 }: {
   onAdvance: () => Promise<void>;
   basePath?: string;
   savePath?: string;
+  title?: React.ReactNode;
+  description?: React.ReactNode;
+  submitLabel?: string;
 }) {
   const [form, setForm] = useState<ContextForm>(emptyForm);
   const [busy, setBusy] = useState(false);
@@ -38,7 +44,7 @@ export function ContextSetup({
     api<ContextForm>(basePath)
       .then(setForm)
       .catch((e) => setError(e.message));
-  }, []);
+  }, [basePath]);
 
   const save = async () => {
     setBusy(true);
@@ -58,8 +64,8 @@ export function ContextSetup({
 
   return (
     <Section
-      title="Shared context"
-      description={<>This step defines the organization and deployment scope for the whole repository. AIOS writes the root <code>org.md</code> plus the root <code>CLAUDE.md</code> and <code>AGENTS.md</code>, then syncs shared context into each department.</>}
+      title={title}
+      description={description}
     >
       <input
         value={form.organizationName}
@@ -94,7 +100,7 @@ export function ContextSetup({
 
       <div className="row">
         <button className="primary" onClick={save} disabled={busy || !form.organizationName.trim() || !form.deploymentScope.trim()}>
-          {busy ? "Saving..." : "Save context"}
+          {busy ? "Saving..." : submitLabel}
         </button>
       </div>
 
