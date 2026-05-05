@@ -42,6 +42,8 @@ When using a PAT, AIOS automatically creates or updates a GitHub `push` webhook 
 
 The first repo becomes the default company. After onboarding, use the sidebar company switcher to add more companies from the same GitHub account. Adding a company reuses the existing GitHub PAT and only asks for a repo, company context, and that company's Telegram/email notification connection. Repos already connected to another company are hidden from the picker.
 
+If an attached repo already contains department `.env` files with `AIOS_STORAGE_*` and `AIOS_STORAGE_PUBLIC_BASE_URL`, AIOS treats storage as configured and checks the public file host. When that HTTPS hostname points at the VPS, AIOS adds it to the managed Caddy config and performs a rate-limited repair attempt so Caddy can obtain TLS. Files remains browsable if public-link HTTPS is still pending, but the dashboard shows a warning.
+
 After onboarding, `Settings` can be used to:
 - re-authorize Claude Code or Codex
 - reconnect GitHub with a PAT or deploy key

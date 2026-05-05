@@ -30,6 +30,7 @@ import {
 } from "../services/storageClient";
 import { probe } from "../services/storageProbe";
 import { buildPublicObjectUrl, encodePublicPath, probePublicBaseUrl } from "../services/publicBaseUrl";
+import { repairDepartmentStoragePublicUrl } from "../services/storagePublicUrlRepair";
 import { syncManagedCaddy } from "../services/caddy";
 import { commitRepoPaths, isGitWorktreeBlocked, syncRepoWithRemote } from "../services/repo";
 
@@ -239,6 +240,12 @@ export function registerStorageRoutes(router: Router) {
       });
     }
     res.json({ ok: true, changed });
+  });
+
+  router.post("/api/departments/:dept/storage/public-url/repair", async (req, res) => {
+    await guard(req, res);
+    const dept = req.params.dept;
+    res.json(await repairDepartmentStoragePublicUrl(dept));
   });
 
   router.get("/api/departments/:dept/storage/objects", async (req, res) => {

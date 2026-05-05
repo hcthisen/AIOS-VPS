@@ -1,6 +1,7 @@
 import { Router, badRequest, conflict, notFound } from "../http";
 import { adminOnly } from "../auth";
 import { db } from "../db";
+import { log } from "../log";
 import { withCompanyContext } from "../company-context";
 import {
   createCompany,
@@ -15,6 +16,7 @@ import { activeProcessCount } from "../services/executor";
 import { getGithubCreds, listRepos, ensureGitHubPushWebhook, deleteGitHubPushWebhook, createRepo } from "../services/github";
 import { cloneRepo, readRepoContext, validateAiosRepo, writeRepoContext, scaffoldRepo, gitRun } from "../services/repo";
 import { runSyncLayer } from "../services/sync";
+import { repairAllStoragePublicUrls } from "../services/storagePublicUrlRepair";
 import {
   approveTelegramPairing,
   getNotificationConfig,
@@ -81,6 +83,7 @@ export function registerCompanyRoutes(router: Router) {
       db.prepare("DELETE FROM companies WHERE id = ?").run(company.id);
       throw e;
     }
+    queueCompanyStoragePublicUrlRepair(company);
     res.json({
       ok: true,
       company: {
@@ -222,6 +225,21 @@ export function registerCompanyRoutes(router: Router) {
       res.json(await sendNotification("AIOS test notification", "AIOS test"));
     });
   });
+}
+
+function queueCompanyStoragePublicUrlRepair(company: ReturnType<typeof createCompany>) {
+  setTimeout(() => {
+    void withCompanyContext(company, async () => repairAllStoragePublicUrls())
+      .then((results) => {
+        const failed = results.filter((result) => !result.ok);
+        if (failed.length) {
+          log.warn(`storage public URL repair completed with ${failed.length} failure(s) for ${company.slug}`);
+        }
+      })
+      .catch((e) => {
+        log.warn(`storage public URL repair failed for ${company.slug}: ${String((e as any)?.message || e)}`);
+      });
+  }, 0);
 }
 
 async function createCompanyRepo(body: any, creds: { token?: string; username?: string }): Promise<string> {

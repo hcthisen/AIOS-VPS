@@ -4,7 +4,7 @@ import { Banner } from "../../components/Banner";
 import { Section } from "../../components/Section";
 import { StorageBrowser } from "./StorageBrowser";
 import { StorageSetup } from "./StorageSetup";
-import { FilesQuery, StoragePublic, Visibility } from "./types";
+import { FilesQuery, PublicUrlRepairResult, StoragePublic, Visibility } from "./types";
 
 export function FilesTab({
   deptName,
@@ -17,6 +17,8 @@ export function FilesTab({
 }) {
   const [cfg, setCfg] = useState<StoragePublic | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [publicUrlRepair, setPublicUrlRepair] = useState<PublicUrlRepairResult | null>(null);
+  const [repairingPublicUrl, setRepairingPublicUrl] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const visibility: Visibility = query.visibility === "private" ? "private" : "public";
@@ -29,6 +31,7 @@ export function FilesTab({
         `/api/departments/${encodeURIComponent(deptName)}/storage/config`,
       );
       setCfg(r);
+      if (!r.configured || !r.publicBaseUrl) setPublicUrlRepair(null);
       setError(null);
     } catch (e: any) {
       setError(e?.message || String(e));
@@ -40,6 +43,36 @@ export function FilesTab({
   useEffect(() => {
     refresh().catch(() => {});
   }, [deptName]);
+
+  useEffect(() => {
+    if (!cfg?.configured || !cfg.publicBaseUrl) return;
+    let cancelled = false;
+    setRepairingPublicUrl(true);
+    api<PublicUrlRepairResult>(
+      `/api/departments/${encodeURIComponent(deptName)}/storage/public-url/repair`,
+      { method: "POST" },
+    )
+      .then((result) => {
+        if (!cancelled) setPublicUrlRepair(result);
+      })
+      .catch((e: any) => {
+        if (!cancelled) {
+          setPublicUrlRepair({
+            ok: false,
+            status: "failed",
+            publicBaseUrl: cfg.publicBaseUrl,
+            host: "",
+            detail: e?.message || String(e),
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRepairingPublicUrl(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cfg?.configured, cfg?.publicBaseUrl, deptName]);
 
   if (loading && !cfg) {
     return <Section title="Files"><div className="muted">Loading...</div></Section>;
@@ -78,6 +111,8 @@ export function FilesTab({
       <StorageBrowser
         deptName={deptName}
         existing={cfg}
+        publicUrlRepair={publicUrlRepair}
+        repairingPublicUrl={repairingPublicUrl}
         visibility={visibility}
         subPrefix={subPrefix}
         highlight={query.highlight}

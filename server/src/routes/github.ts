@@ -23,6 +23,7 @@ import { pollTelegramUpdatesOnce } from "../services/telegramUpdates";
 import { buildCommonAuthEnv } from "../services/provider-auth";
 import { runSyncLayer } from "../services/sync";
 import { getDefaultCompany, updateCompanyDisplayName, updateDefaultCompanyRepoAndName } from "../services/companies";
+import { repairAllStoragePublicUrls } from "../services/storagePublicUrlRepair";
 import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
@@ -32,6 +33,23 @@ async function ensurePushWebhook(token: string, fullName: string) {
   if (!result.ok) log.warn(`github webhook setup failed for ${fullName}: ${result.error}`);
   else log.info(`github webhook ${result.action} for ${fullName}: ${result.url}`);
   return result;
+}
+
+function queueStoragePublicUrlRepair(source: string) {
+  setTimeout(() => {
+    void repairAllStoragePublicUrls()
+      .then((results) => {
+        const failed = results.filter((result) => !result.ok);
+        if (failed.length) {
+          log.warn(`storage public URL repair completed with ${failed.length} failure(s) after ${source}`);
+        } else if (results.length) {
+          log.info(`storage public URL repair completed after ${source}`);
+        }
+      })
+      .catch((e) => {
+        log.warn(`storage public URL repair failed after ${source}: ${String((e as any)?.message || e)}`);
+      });
+  }, 0);
 }
 
 export function registerOnboardingRoutes(router: Router) {
@@ -108,6 +126,7 @@ export function registerOnboardingRoutes(router: Router) {
     }
     const webhook = await ensurePushWebhook(creds.token, r.fullName);
     updateDefaultCompanyRepoAndName(r.fullName, name);
+    queueStoragePublicUrlRepair("repo create");
     if (getSetupPhase() === "repo_setup") advanceSetupPhase("repo_setup");
     res.json({ ok: true, fullName: r.fullName, commit: await repoHead(), webhook, setupPhase: getSetupPhase() });
   });
@@ -125,6 +144,7 @@ export function registerOnboardingRoutes(router: Router) {
     if (!v.ok) throw badRequest(v.error || "validation failed");
     const webhook = await ensurePushWebhook(creds.token, fullName);
     updateDefaultCompanyRepoAndName(fullName, fullName.split("/")[1] || fullName);
+    queueStoragePublicUrlRepair("repo attach");
     if (getSetupPhase() === "repo_setup") advanceSetupPhase("repo_setup");
     res.json({ ok: true, fullName, yaml: v.yaml, webhook, setupPhase: getSetupPhase() });
   });

@@ -235,6 +235,7 @@ Each scope can configure S3-compatible storage through dashboard UI. Storage cre
 - Upload and delete objects.
 - Generate signed URLs.
 - Use Caddy-managed public host routing when a public storage hostname resolves to the VPS.
+- Reconcile imported `AIOS_STORAGE_PUBLIC_BASE_URL` hosts from existing repos by checking live HTTPS, adding the host to managed Caddy when it points at the VPS, and throttling forced repair attempts per hostname to avoid ACME rate limits.
 - Add or reset managed storage instructions in `CLAUDE.md` and `AGENTS.md`.
 
 ## System Updates

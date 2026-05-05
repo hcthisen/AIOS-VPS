@@ -137,7 +137,14 @@ async function isUnitActive(unit: string): Promise<boolean> {
   }
 }
 
-export async function syncManagedCaddy(extraHosts: string[] = []): Promise<{ hosts: string[]; enabled: boolean }> {
+export interface SyncManagedCaddyOptions {
+  forceRestart?: boolean;
+}
+
+export async function syncManagedCaddy(
+  extraHosts: string[] = [],
+  opts: SyncManagedCaddyOptions = {},
+): Promise<{ hosts: string[]; enabled: boolean }> {
   const configuredHosts = await managedStorageHosts();
   const hosts = [
     dashboardHost(),
@@ -158,7 +165,8 @@ export async function syncManagedCaddy(extraHosts: string[] = []): Promise<{ hos
       const active = await isUnitActive("caddy");
       if (enabled) {
         await sudoSystemctl("enable", "caddy");
-        if (!active) await sudoSystemctl("start", "caddy");
+        if (opts.forceRestart) await sudoSystemctl("restart", "caddy");
+        else if (!active) await sudoSystemctl("start", "caddy");
         else if (bodyChanged) await sudoSystemctl("reload", "caddy");
       } else {
         if (active) await sudoSystemctl("stop", "caddy").catch(() => {});

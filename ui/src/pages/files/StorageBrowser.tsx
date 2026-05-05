@@ -3,12 +3,14 @@ import { api, getCsrf } from "../../api";
 import { Banner } from "../../components/Banner";
 import { Drawer } from "../../components/Drawer";
 import { IconButton } from "../../components/IconButton";
-import { FileEntry, ListResponse, StoragePublic, Visibility } from "./types";
+import { FileEntry, ListResponse, PublicUrlRepairResult, StoragePublic, Visibility } from "./types";
 import { StorageSetup, defaultFormState } from "./StorageSetup";
 
 interface Props {
   deptName: string;
   existing: StoragePublic;
+  publicUrlRepair: PublicUrlRepairResult | null;
+  repairingPublicUrl: boolean;
   visibility: Visibility;
   subPrefix: string;
   highlight?: string;
@@ -22,6 +24,7 @@ type SortKey = "name" | "size" | "date";
 
 export function StorageBrowser(props: Props) {
   const { deptName, existing, visibility, subPrefix, highlight, onVisibility, onNavigate, onChanged, onDisconnect } = props;
+  const { publicUrlRepair, repairingPublicUrl } = props;
   const [data, setData] = useState<ListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -157,6 +160,15 @@ export function StorageBrowser(props: Props) {
     <div className="col" style={{ gap: 16 }}>
       {error && <Banner kind="err" onDismiss={() => setError(null)}>{error}</Banner>}
       {notice && <Banner kind="ok" onDismiss={() => setNotice(null)}>{notice}</Banner>}
+      {repairingPublicUrl && existing.publicBaseUrl ? (
+        <Banner kind="info">Checking public file URL HTTPS for <code>{existing.publicBaseUrl}</code>.</Banner>
+      ) : null}
+      {publicUrlRepair && !publicUrlRepair.ok ? (
+        <Banner kind="warn">
+          Public file links may not work: {publicUrlRepair.detail}
+          {publicUrlRepair.hint ? <div className="small muted" style={{ marginTop: 4 }}>{publicUrlRepair.hint}</div> : null}
+        </Banner>
+      ) : null}
 
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="row" style={{ gap: 8 }}>

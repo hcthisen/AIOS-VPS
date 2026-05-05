@@ -11,6 +11,16 @@ export interface StoragePublic {
   privatePrefix: string;
 }
 
+export interface PublicUrlRepairResult {
+  ok: boolean;
+  status: "ok" | "repairing" | "failed" | "external" | "not_applicable";
+  publicBaseUrl: string;
+  host: string;
+  detail: string;
+  hint?: string;
+  repaired?: boolean;
+}
+
 export interface StorageFormState {
   endpoint: string;
   region: string;
