@@ -2,6 +2,33 @@
 
 let csrfToken: string | null = null;
 let activeCompanySlug: string | null = localStorage.getItem("aios.activeCompanySlug");
+
+const GLOBAL_API_PREFIXES = [
+  "/api/auth",
+  "/api/companies",
+  "/api/health",
+  "/api/onboarding",
+  "/api/provider-auth",
+  "/api/vps",
+  "/api/settings/github",
+  "/api/settings/system-update",
+  "/api/settings/time",
+];
+
+function apiPathname(path: string): string {
+  try {
+    return new URL(path, window.location.origin).pathname;
+  } catch {
+    return path.split("?")[0] || path;
+  }
+}
+
+function shouldAttachCompanySlug(path: string): boolean {
+  const pathname = apiPathname(path);
+  if (!pathname.startsWith("/api/")) return false;
+  return !GLOBAL_API_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
 export function setCsrf(t: string | null) { csrfToken = t; }
 export function getCsrf() { return csrfToken; }
 export function setActiveCompanySlug(slug: string | null) {
@@ -20,7 +47,7 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
   if (method !== "GET" && method !== "HEAD" && csrfToken) {
     headers.set("x-csrf", csrfToken);
   }
-  if (activeCompanySlug && path.startsWith("/api/") && !path.startsWith("/api/companies") && !headers.has("x-aios-company-slug")) {
+  if (activeCompanySlug && shouldAttachCompanySlug(path) && !headers.has("x-aios-company-slug")) {
     headers.set("x-aios-company-slug", activeCompanySlug);
   }
   const res = await fetch(path, { ...init, headers, credentials: "include" });
@@ -36,7 +63,7 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
 
 export function apiStream(path: string, handlers: { onEvent: (event: string, data: any) => void; onError?: (e: any) => void; }) {
   const url = new URL(path, window.location.origin);
-  if (activeCompanySlug && path.startsWith("/api/")) url.searchParams.set("company", activeCompanySlug);
+  if (activeCompanySlug && shouldAttachCompanySlug(path)) url.searchParams.set("company", activeCompanySlug);
   const es = new EventSource(url.toString(), { withCredentials: true } as any);
   const raw = es as any;
   // EventSource gives us .addEventListener for named events.
