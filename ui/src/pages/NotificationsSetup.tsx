@@ -28,6 +28,15 @@ type NotificationConfig =
   | { channel: "email"; from: string; to: string; smtpHost: string; smtpPort: number; smtpUser?: string; secure?: boolean }
   | { channel: "none" };
 
+interface TelegramTranscriptionStatus {
+  configured: boolean;
+  valid: boolean;
+  model: string;
+  source: "root-env";
+  checkedAt: number | null;
+  error?: string;
+}
+
 export function NotificationsSetup({
   onAdvance,
   mode = "onboarding",
@@ -49,6 +58,8 @@ export function NotificationsSetup({
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tested, setTested] = useState<string | null>(null);
+  const [transcriptionStatus, setTranscriptionStatus] = useState<TelegramTranscriptionStatus | null>(null);
+  const [checkingTranscription, setCheckingTranscription] = useState(false);
   const advance = onAdvance || (async () => {});
 
   const pairedCandidate = useMemo(
@@ -87,9 +98,24 @@ export function NotificationsSetup({
     }
   }
 
+  async function loadTranscriptionStatus() {
+    if (mode !== "settings") return;
+    setCheckingTranscription(true);
+    try {
+      setTranscriptionStatus(await api<TelegramTranscriptionStatus>(`${basePath}/telegram/transcription-status`));
+    } finally {
+      setCheckingTranscription(false);
+    }
+  }
+
   useEffect(() => {
     loadConfig().catch(() => {});
   }, [basePath]);
+
+  useEffect(() => {
+    if (mode !== "settings" || channel !== "telegram") return;
+    loadTranscriptionStatus().catch(() => {});
+  }, [basePath, channel, mode]);
 
   useEffect(() => {
     if (channel !== "telegram" || !telegramReady) return;
@@ -305,6 +331,31 @@ export function NotificationsSetup({
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {mode === "settings" && (
+            <div className="candidate-card">
+              <div className="col" style={{ gap: 4 }}>
+                <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <strong>Audio transcription</strong>
+                  <span className={transcriptionStatus?.valid ? "badge ok" : "badge err"}>
+                    {checkingTranscription
+                      ? "checking"
+                      : transcriptionStatus?.valid
+                        ? "ready"
+                        : "needs OPENAI_API_KEY"}
+                  </span>
+                </div>
+                <div className="small muted">
+                  Add <code>OPENAI_API_KEY</code> to the active company root <code>.env</code> to transcribe Telegram voice messages.
+                  {transcriptionStatus?.model ? <> Model: <code>{transcriptionStatus.model}</code>.</> : null}
+                </div>
+                {transcriptionStatus?.error && <div className="small muted">{transcriptionStatus.error}</div>}
+              </div>
+              <button onClick={() => loadTranscriptionStatus().catch((e: any) => setError(e.message))} disabled={checkingTranscription}>
+                {checkingTranscription ? "Checking..." : "Check"}
+              </button>
             </div>
           )}
         </div>

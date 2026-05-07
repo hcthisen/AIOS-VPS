@@ -7,6 +7,10 @@ import { getNotificationConfig, getTelegramPairingState, pickTelegramMessage, se
 import { displayProvider, getProviderAvailability, isProviderAuthorized } from "./providerAvailability";
 import { getRun, runEvents, Run } from "./runs";
 import { listCompanies } from "./companies";
+import {
+  telegramVoiceTranscriptionErrorMessage,
+  transcribeTelegramVoice,
+} from "./telegramTranscription";
 
 type TelegramAgentMessageStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 
@@ -46,6 +50,7 @@ const DEFAULT_CONFIG: TelegramAgentConfig = {
 
 let pollTimer: NodeJS.Timeout | null = null;
 const dispatchingByCompany = new Map<number, Promise<void>>();
+let voiceTranscriber: typeof transcribeTelegramVoice = transcribeTelegramVoice;
 
 function scopedKey(key: string): string {
   return `company.${getCurrentCompanyId()}.${key}`;
@@ -159,6 +164,10 @@ export function enqueueTelegramAgentMessage(input: { updateId: number; chatId: s
   return result.changes > 0;
 }
 
+export function setTelegramVoiceTranscriberForTests(transcriber: typeof transcribeTelegramVoice | null) {
+  voiceTranscriber = transcriber || transcribeTelegramVoice;
+}
+
 export function buildTelegramRootPrompt(messages: TelegramAgentMessage[]): string {
   const body = messages
     .map((message, index) => `Message ${index + 1} (${new Date(message.received_at).toISOString()}):\n${message.text}`)
@@ -225,7 +234,24 @@ export async function processTelegramAgentUpdates(updates: TelegramUpdate[]) {
       : typeof message?.caption === "string"
         ? message.caption
         : "";
-    enqueueTelegramAgentMessage({ updateId: update.update_id, chatId, text });
+    if (text.trim()) {
+      enqueueTelegramAgentMessage({ updateId: update.update_id, chatId, text });
+      continue;
+    }
+
+    const voiceFileId = typeof message?.voice?.file_id === "string" ? message.voice.file_id.trim() : "";
+    if (!voiceFileId || telegramAgentMessageExists(update.update_id)) continue;
+
+    try {
+      const transcript = await voiceTranscriber({ botToken: notification.botToken, fileId: voiceFileId });
+      enqueueTelegramAgentMessage({
+        updateId: update.update_id,
+        chatId,
+        text: `[Voice message transcript]\n${transcript}`,
+      });
+    } catch (e: any) {
+      await sendTelegramReply(chatId, telegramVoiceTranscriptionErrorMessage(e));
+    }
   }
 }
 
@@ -340,6 +366,11 @@ function markMessagesFinished(messages: TelegramAgentMessage[], status: "succeed
 function countMessages(status: TelegramAgentMessageStatus): number {
   const row = db.prepare("SELECT COUNT(*) AS count FROM telegram_agent_messages WHERE company_id = ? AND status = ?").get(getCurrentCompanyId(), status) as { count: number };
   return Number(row.count || 0);
+}
+
+function telegramAgentMessageExists(updateId: number): boolean {
+  const row = db.prepare("SELECT 1 FROM telegram_agent_messages WHERE company_id = ? AND update_id = ?").get(getCurrentCompanyId(), updateId);
+  return !!row;
 }
 
 function activeTelegramRunIds(): string[] {

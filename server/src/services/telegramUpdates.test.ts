@@ -295,6 +295,8 @@ function cleanupTelegramUpdateFixtures() {
     "telegram-fail-company",
     "telegram-ok-company",
     "telegram-agent-company",
+    "telegram-agent-stale-claim",
+    "telegram-agent-incomplete",
   ]) {
     cleanupCompany(slug);
   }

@@ -12,11 +12,14 @@ import {
   enqueueTelegramAgentMessage,
   getTelegramAgentStatus,
   isTelegramAgentConfiguredForCurrentCompany,
+  processTelegramAgentUpdates,
   resetTelegramAgentSession,
   saveTelegramAgentConfig,
+  setTelegramVoiceTranscriberForTests,
   TelegramAgentMessage,
 } from "./telegramAgent";
 import { setNotificationConfig } from "./notifications";
+import { TelegramVoiceTranscriptionError } from "./telegramTranscription";
 import { Company, getCompanyBySlug } from "./companies";
 
 describe("telegramAgent", () => {
@@ -32,11 +35,16 @@ describe("telegramAgent", () => {
     kvDel("telegram.rootAgent.config");
     kvDel("company.1.telegram.rootAgent.config");
     kvDel("company.1.notifications.config");
+    setTelegramVoiceTranscriberForTests(null);
   });
 
   afterEach(async () => {
+    setTelegramVoiceTranscriberForTests(null);
     if (previousAiosHome === undefined) delete process.env.AIOS_HOME;
     else process.env.AIOS_HOME = previousAiosHome;
+    kvDel("telegram.rootAgent.config");
+    kvDel("company.1.telegram.rootAgent.config");
+    kvDel("company.1.notifications.config");
     await rm(tempHome, { recursive: true, force: true });
   });
 
@@ -156,6 +164,7 @@ describe("telegramAgent", () => {
   it("expires stale root claims before dispatching queued Telegram messages", async () => {
     const originalFetch = globalThis.fetch;
     const company = insertCompany("telegram-agent-stale-claim", "Telegram Agent Stale Claim");
+    const updateId = 100_000 + company.id;
     globalThis.fetch = mockTelegramSendFetch();
     try {
       await withCompanyContext(company, async () => {
@@ -168,20 +177,20 @@ describe("telegramAgent", () => {
           resetGeneration: 0,
           updatedAt: Date.now(),
         }));
-        enqueueTelegramAgentMessage({ updateId: 125, chatId: "42", text: "process me" });
+        enqueueTelegramAgentMessage({ updateId, chatId: "42", text: "process me" });
         db.prepare(`
           INSERT INTO claims(company_id, department, run_id, claimed_at, expires_at)
           VALUES(?, '_root', 'stale-run', ?, ?)
         `).run(company.id, Date.now() - 10_000, Date.now() - 1);
 
         await dispatchTelegramAgentQueue();
-      });
 
-      const message = db.prepare("SELECT status, error FROM telegram_agent_messages WHERE company_id = ? AND update_id = 125").get(company.id) as { status: string; error: string };
-      const claim = db.prepare("SELECT 1 FROM claims WHERE company_id = ? AND department = '_root'").get(company.id);
-      assert.equal(claim, undefined);
-      assert.equal(message.status, "failed");
-      assert.match(message.error, /Codex is not authorized/);
+        const message = db.prepare("SELECT status, error FROM telegram_agent_messages WHERE company_id = ? AND update_id = ?").get(company.id, updateId) as { status: string; error: string };
+        const claim = db.prepare("SELECT 1 FROM claims WHERE company_id = ? AND department = '_root'").get(company.id);
+        assert.equal(claim, undefined);
+        assert.equal(message.status, "failed");
+        assert.match(message.error, /Codex is not authorized/);
+      });
     } finally {
       globalThis.fetch = originalFetch;
       cleanupCompany("telegram-agent-stale-claim");
@@ -208,12 +217,112 @@ describe("telegramAgent", () => {
       cleanupCompany("telegram-agent-incomplete");
     }
   });
+
+  it("queues approved Telegram voice transcripts as Root agent messages", async () => {
+    setNotificationConfig({ channel: "telegram", botToken: "123:test", chatId: "42" });
+    kvSet("company.1.telegram.rootAgent.config", JSON.stringify({
+      enabled: true,
+      provider: "codex",
+      sessionId: null,
+      offset: null,
+      resetGeneration: 0,
+      updatedAt: Date.now(),
+    }));
+    setTelegramVoiceTranscriberForTests(async ({ botToken, fileId }) => {
+      assert.equal(botToken, "123:test");
+      assert.equal(fileId, "voice-file");
+      return "Check the overnight deploy.";
+    });
+
+    await processTelegramAgentUpdates([{
+      update_id: 500,
+      message: {
+        message_id: 1,
+        voice: { file_id: "voice-file" },
+        chat: { id: 42, type: "private", first_name: "Owner" },
+        from: { id: 42, first_name: "Owner" },
+      },
+    }]);
+
+    const row = db.prepare("SELECT text, status FROM telegram_agent_messages WHERE update_id = 500").get() as { text: string; status: string };
+    assert.equal(row.status, "queued");
+    assert.equal(row.text, "[Voice message transcript]\nCheck the overnight deploy.");
+  });
+
+  it("ignores Telegram voice messages from unapproved chats", async () => {
+    let called = false;
+    setNotificationConfig({ channel: "telegram", botToken: "123:test", chatId: "42" });
+    kvSet("company.1.telegram.rootAgent.config", JSON.stringify({
+      enabled: true,
+      provider: "codex",
+      sessionId: null,
+      offset: null,
+      resetGeneration: 0,
+      updatedAt: Date.now(),
+    }));
+    setTelegramVoiceTranscriberForTests(async () => {
+      called = true;
+      return "nope";
+    });
+
+    await processTelegramAgentUpdates([{
+      update_id: 501,
+      message: {
+        message_id: 1,
+        voice: { file_id: "voice-file" },
+        chat: { id: 77, type: "private", first_name: "Other" },
+        from: { id: 77, first_name: "Other" },
+      },
+    }]);
+
+    const row = db.prepare("SELECT 1 FROM telegram_agent_messages WHERE update_id = 501").get();
+    assert.equal(row, undefined);
+    assert.equal(called, false);
+  });
+
+  it("reports voice transcription setup errors without queueing a Root agent message", async () => {
+    const originalFetch = globalThis.fetch;
+    const sent: any[] = [];
+    globalThis.fetch = mockTelegramSendFetch(sent);
+    try {
+      setNotificationConfig({ channel: "telegram", botToken: "123:test", chatId: "42" });
+      kvSet("company.1.telegram.rootAgent.config", JSON.stringify({
+        enabled: true,
+        provider: "codex",
+        sessionId: null,
+        offset: null,
+        resetGeneration: 0,
+        updatedAt: Date.now(),
+      }));
+      setTelegramVoiceTranscriberForTests(async () => {
+        throw new TelegramVoiceTranscriptionError("missing_key", "OPENAI_API_KEY is missing");
+      });
+
+      await processTelegramAgentUpdates([{
+        update_id: 502,
+        message: {
+          message_id: 1,
+          voice: { file_id: "voice-file" },
+          chat: { id: 42, type: "private", first_name: "Owner" },
+          from: { id: 42, first_name: "Owner" },
+        },
+      }]);
+
+      const row = db.prepare("SELECT 1 FROM telegram_agent_messages WHERE update_id = 502").get();
+      assert.equal(row, undefined);
+      assert.equal(sent.length, 1);
+      assert.match(String(sent[0].text), /OPENAI_API_KEY/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
-function mockTelegramSendFetch(): typeof fetch {
-  return (async (url: string | URL | Request) => {
+function mockTelegramSendFetch(sent: any[] = []): typeof fetch {
+  return (async (url: string | URL | Request, init?: RequestInit) => {
     const rawUrl = String(url);
     if (rawUrl.endsWith("/sendMessage")) {
+      sent.push(JSON.parse(String(init?.body || "{}")));
       return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
     }
     return new Response(JSON.stringify({ ok: false, description: `unexpected ${rawUrl}` }), { status: 404 });

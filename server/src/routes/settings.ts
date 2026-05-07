@@ -27,6 +27,7 @@ import {
   resetTelegramAgentSession,
   saveTelegramAgentConfig,
 } from "../services/telegramAgent";
+import { getTelegramTranscriptionStatus } from "../services/telegramTranscription";
 import { pollCurrentCompanyTelegramUpdatesOnce } from "../services/telegramUpdates";
 import { normalizeTimezoneOffsetMinutes, serverTimeSnapshot } from "../services/time";
 import { listCompanies } from "../services/companies";
@@ -257,6 +258,11 @@ export function registerSettingsRoutes(router: Router) {
     } catch (e: any) {
       throw badRequest(String(e?.message || e));
     }
+  });
+
+  router.get("/api/settings/notifications/telegram/transcription-status", async (req, res) => {
+    await guard(req, res);
+    res.json(await getTelegramTranscriptionStatus());
   });
 
   router.post("/api/settings/notifications/telegram/approve", async (req, res) => {

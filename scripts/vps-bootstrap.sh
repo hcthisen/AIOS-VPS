@@ -46,7 +46,7 @@ log "installing base packages"
 apt-get update -qq
 apt-get install -y -qq \
   ca-certificates curl wget gnupg lsb-release \
-  git build-essential python3 unzip ufw jq dnsutils rsync bubblewrap \
+  git build-essential python3 unzip ufw jq dnsutils rsync bubblewrap ffmpeg \
   debian-keyring debian-archive-keyring apt-transport-https
 
 AWSCLI_APT_CANDIDATE="$(apt-cache policy awscli 2>/dev/null | awk '/Candidate:/ { print $2; exit }')"
