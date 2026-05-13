@@ -12,7 +12,7 @@ import { isSystemUpdateBlocking } from "./systemUpdate";
 import { processOwnerNotificationOutbox, retryPendingOwnerNotifications } from "./ownerNotifications";
 import { schedulerCronOptions } from "./time";
 import { getCurrentCompanyId, withCompanyContext } from "../company-context";
-import { listCompanies } from "./companies";
+import { hasLocalAiosRepo, listCompanies } from "./companies";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 export const MIN_GOAL_INTERVAL_MS = 10 * 60_000;
@@ -143,11 +143,15 @@ export async function runHeartbeatTick() {
 }
 
 export async function runAllCompaniesHeartbeatTick() {
-  for (const company of listCompanies().filter((entry) => entry.setupPhase === "complete")) {
+  for (const company of listHeartbeatCompanies()) {
     await withCompanyContext(company, async () => {
       await runHeartbeatTick();
     });
   }
+}
+
+export function listHeartbeatCompanies() {
+  return listCompanies().filter((entry) => entry.setupPhase === "complete" || hasLocalAiosRepo(entry));
 }
 
 async function commitOutboxCleanup() {

@@ -60,4 +60,23 @@ describe("runSyncLayer department deletion", () => {
     assert.equal(existsSync(join(tempRoot, "sample", "cron", ".gitkeep")), false);
     assert.equal(existsSync(join(tempRoot, "sample", "logs", "run.log")), true);
   });
+
+  it("creates generic provider instructions when both files are missing", async () => {
+    await rm(join(tempRoot, "CLAUDE.md"), { force: true });
+    await rm(join(tempRoot, "AGENTS.md"), { force: true });
+    await rm(join(tempRoot, "sample", "CLAUDE.md"), { force: true });
+    await rm(join(tempRoot, "sample", "AGENTS.md"), { force: true });
+
+    await runSyncLayer({ commit: false });
+
+    const rootClaude = await readFile(join(tempRoot, "CLAUDE.md"), "utf-8");
+    const rootAgents = await readFile(join(tempRoot, "AGENTS.md"), "utf-8");
+    const sampleClaude = await readFile(join(tempRoot, "sample", "CLAUDE.md"), "utf-8");
+    const sampleAgents = await readFile(join(tempRoot, "sample", "AGENTS.md"), "utf-8");
+
+    assert.match(rootClaude, /Generic AIOS root workspace instructions/);
+    assert.equal(rootAgents, rootClaude);
+    assert.match(sampleClaude, /# sample department/);
+    assert.equal(sampleAgents, sampleClaude);
+  });
 });

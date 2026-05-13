@@ -1,4 +1,5 @@
 import { rm } from "fs/promises";
+import { existsSync } from "fs";
 import { join, resolve, sep } from "path";
 import { randomBytes } from "crypto";
 
@@ -104,7 +105,7 @@ export function createCompany(input: {
   const now = Date.now();
   const result = db.prepare(`
     INSERT INTO companies(slug, display_name, repo_full_name, repo_dir, setup_phase, is_default, webhook_secret, created_at, updated_at)
-    VALUES(?, ?, ?, ?, 'context_setup', 0, ?, ?, ?)
+    VALUES(?, ?, ?, ?, 'complete', 0, ?, ?, ?)
   `).run(slug, displayName, repoFullName, repoDir, randomBytes(32).toString("hex"), now, now);
   return getCompanyById(Number(result.lastInsertRowid))!;
 }
@@ -158,6 +159,25 @@ export function updateCompanyDisplayName(companyId: number, displayName: string)
 export function setCompanySetupPhase(companyId: number, phase: CompanySetupPhase) {
   db.prepare("UPDATE companies SET setup_phase = ?, updated_at = ? WHERE id = ?")
     .run(phase, Date.now(), companyId);
+}
+
+export function hasLocalAiosRepo(company: Pick<Company, "repoDir">): boolean {
+  return existsSync(join(company.repoDir, "aios.yaml"));
+}
+
+export function repairIncompleteRunnableCompanies(): number {
+  const rows = db.prepare("SELECT id, repo_dir FROM companies WHERE setup_phase != 'complete'")
+    .all() as Array<{ id: number; repo_dir: string }>;
+  const runnable = rows.filter((row) => hasLocalAiosRepo({ repoDir: row.repo_dir }));
+  if (!runnable.length) return 0;
+
+  const now = Date.now();
+  const update = db.prepare("UPDATE companies SET setup_phase = 'complete', updated_at = ? WHERE id = ?");
+  const tx = db.transaction((items: typeof runnable) => {
+    for (const item of items) update.run(now, item.id);
+  });
+  tx(runnable);
+  return runnable.length;
 }
 
 export function ensureCompanyWebhookSecret(companyId: number): string {

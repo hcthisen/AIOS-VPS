@@ -116,6 +116,24 @@ describe("departments", () => {
     assert.equal(task?.name, "maintenance");
   });
 
+  it("lists department cron tasks without provider instruction files", async () => {
+    await mkdir(join(tempRoot, "sample", "cron"), { recursive: true });
+    await writeFile(join(tempRoot, "sample", "cron", "report.md"), [
+      "---",
+      "schedule: \"0 * * * *\"",
+      "provider: codex",
+      "---",
+      "",
+      "Run report.",
+      "",
+    ].join("\n"), "utf-8");
+
+    const tasks = await listCronTasks();
+    const task = tasks.find((entry) => entry.relPath === "sample/cron/report.md");
+    assert.equal(task?.department, "sample");
+    assert.equal(task?.schedule, "0 * * * *");
+  });
+
   it("defaults goals without schedules to a daily wakeup", async () => {
     await mkdir(join(tempRoot, "sample", "goals"), { recursive: true });
     await writeFile(join(tempRoot, "sample", "goals", "grow.md"), [

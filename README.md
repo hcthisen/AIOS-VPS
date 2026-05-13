@@ -20,7 +20,7 @@ See [`AIOS-PRD.md`](./AIOS-PRD.md) for the full product specification.
 - Per-folder claims with backlog queue
 - Two-way GitHub sync (pull before run, commit + push after)
 - GitHub push webhook registration when using a PAT, with 60-second polling fallback
-- System-managed sync layer: `CLAUDE.md ↔ AGENTS.md`, `org.md` propagation, auto-generated `_org.md`
+- System-managed sync layer: `CLAUDE.md ↔ AGENTS.md`, generic instruction bootstrap, `org.md` propagation, auto-generated `_org.md`
 - Provider-neutral execution (Claude Code or Codex, selectable per task)
 - Owner notification outbox with Telegram / email delivery
 - Optional inbound Telegram Root Agent chat
@@ -67,7 +67,7 @@ See [`DEPLOY.md`](./DEPLOY.md) for the full walkthrough. The deployment command 
    - connect GitHub with a PAT, create or attach a repo
    - confirm shared organization context
    - configure notifications (Telegram or email)
-4. **Add more companies** from the sidebar company switcher. New companies reuse the one GitHub PAT and only run through repo selection, context, and notifications. Already connected repos are hidden.
+4. **Add more companies** from the sidebar company switcher. New companies reuse the one GitHub PAT and become runnable after repo create/attach succeeds. Company context and notifications can be added later from Settings. Already connected repos are hidden.
 5. **Later changes** live in `Settings`:
    - re-authorize Claude Code or Codex
    - reconnect GitHub

@@ -2,8 +2,6 @@ import React, { useEffect, useState } from "react";
 import { api, setActiveCompanySlug } from "../api";
 import { Section } from "../components/Section";
 import { Banner } from "../components/Banner";
-import { ContextSetup } from "./ContextSetup";
-import { NotificationsSetup } from "./NotificationsSetup";
 
 interface RepoOption {
   fullName: string;
@@ -17,7 +15,6 @@ export function AddCompanyPage({
   navigate: (to: string) => void;
   onChanged: () => Promise<void>;
 }) {
-  const [step, setStep] = useState<"repo" | "context" | "notifications">("repo");
   const [mode, setMode] = useState<"create" | "attach">("create");
   const [repos, setRepos] = useState<RepoOption[]>([]);
   const [fullName, setFullName] = useState("");
@@ -25,7 +22,6 @@ export function AddCompanyPage({
   const [isPrivate, setIsPrivate] = useState(true);
   const [displayName, setDisplayName] = useState("");
   const [displayNameTouched, setDisplayNameTouched] = useState(false);
-  const [companySlug, setCompanySlug] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,46 +53,15 @@ export function AddCompanyPage({
             : { mode, fullName, displayName },
         ),
       });
-      setCompanySlug(result.company.slug);
+      setActiveCompanySlug(result.company.slug);
       await onChanged();
-      setStep("context");
+      navigate("/");
     } catch (e: any) {
       setError(e.message);
     } finally {
       setBusy(false);
     }
   };
-
-  if (step === "context" && companySlug) {
-    return (
-      <div className="col narrow">
-        <h2>Add company</h2>
-        <ContextSetup
-          basePath={`/api/companies/${encodeURIComponent(companySlug)}/context`}
-          savePath={`/api/companies/${encodeURIComponent(companySlug)}/context`}
-          onAdvance={async () => setStep("notifications")}
-        />
-      </div>
-    );
-  }
-
-  if (step === "notifications" && companySlug) {
-    return (
-      <div className="col narrow">
-        <h2>Add company</h2>
-        <NotificationsSetup
-          mode="onboarding"
-          basePath={`/api/companies/${encodeURIComponent(companySlug)}/notifications`}
-          onAdvance={async () => {
-            await api(`/api/companies/${encodeURIComponent(companySlug)}/complete`, { method: "POST" });
-            setActiveCompanySlug(companySlug);
-            await onChanged();
-            navigate("/");
-          }}
-        />
-      </div>
-    );
-  }
 
   return (
     <div className="col narrow">

@@ -91,7 +91,7 @@ export function registerCompanyRoutes(router: Router) {
         slug: company.slug,
         displayName: company.displayName,
         repoFullName: company.repoFullName,
-        setupPhase: "context_setup",
+        setupPhase: company.setupPhase,
       },
     }, 201);
   });
@@ -174,7 +174,7 @@ export function registerCompanyRoutes(router: Router) {
       });
       await runSyncLayer({ commit: false });
     });
-    const setupPhase = company.setupPhase === "context_setup" ? "notifications" : company.setupPhase;
+    const setupPhase = "complete";
     if (setupPhase !== company.setupPhase) setCompanySetupPhase(company.id, setupPhase);
     res.json({ ok: true, setupPhase });
   });

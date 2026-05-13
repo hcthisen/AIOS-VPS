@@ -58,7 +58,7 @@ On first visit to `http://<vps-ip>:3100`, the operator creates the first admin a
 7. `notifications` - configure Telegram, email, or none.
 8. `complete` - heartbeat starts doing work.
 
-After onboarding, the first repo is the default company. The sidebar company switcher can add more companies by selecting an unused repo from the already-connected GitHub account, writing company context, and configuring that company's Telegram/email notifications. Settings can re-authorize providers, reconnect GitHub, update active-company notifications, configure the active-company Telegram Root Agent, and run system updates.
+After onboarding, the first repo is the default company. The sidebar company switcher can add more companies by creating or selecting an unused repo from the already-connected GitHub account. Added companies become runnable after repo validation; company context and Telegram/email notifications are optional Settings steps. Settings can re-authorize providers, reconnect GitHub, update active-company notifications, configure the active-company Telegram Root Agent, and run system updates.
 
 ## Repo Manifest
 
@@ -83,7 +83,7 @@ The parser also tolerates simple `mirrors` metadata, but external subfolder mirr
 
 The root scope and each department can contain:
 
-- `CLAUDE.md` and `AGENTS.md` - provider-neutral agent instructions, kept in sync.
+- `CLAUDE.md` and `AGENTS.md` - provider-neutral agent instructions, kept in sync. If both are missing, AIOS creates generic runnable instructions that do not require company-specific context.
 - `org.md` - root-authored organization/deployment context copied into departments.
 - `_org.md` - auto-generated map of sibling departments.
 - `cron/*.md` - scheduled prompts with YAML frontmatter.
@@ -94,7 +94,7 @@ The root scope and each department can contain:
 - `outbox/*.md` - owner-facing notification requests written by agents.
 - `logs/` - optional repo-local logs or artifacts.
 
-New departments are created from the dashboard by adding the folder, updating `aios.yaml`, creating provider context files, and scaffolding automation folders.
+New departments are created from the dashboard by adding the folder, updating `aios.yaml`, creating generic provider context files, and scaffolding automation folders.
 
 ## Scheduled Tasks
 
@@ -155,7 +155,7 @@ There is no separate local CLI for manual runs in this repository.
 
 The heartbeat:
 
-1. Iterates every fully configured company.
+1. Iterates every company with a complete setup phase or a valid local AIOS repo.
 2. Checks whether onboarding is complete, company pause is off, and no system update is blocking work.
 3. Checks that company's GitHub remote for changes and syncs when needed.
 4. Runs the sync layer when that company worktree is not blocked by active runs.
@@ -193,7 +193,7 @@ Dashboard file edits, department creation, cron/goal changes, storage instructio
 
 The sync layer runs after successful pulls, after successful agent runs, and when triggered manually from the dashboard. It:
 
-- Mirrors `CLAUDE.md` and `AGENTS.md` in the repo root and every department.
+- Mirrors `CLAUDE.md` and `AGENTS.md` in the repo root and every department, creating generic instructions when both files are absent.
 - Ensures standard automation folders and default skills exist.
 - Applies managed owner-notification instructions into provider context files.
 - Copies root `org.md` into each department.

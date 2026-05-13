@@ -16,10 +16,11 @@ import { config } from "../config";
 import { db } from "../db";
 import { getCurrentCompanyId } from "../company-context";
 import { ensureRootDepartmentName, getRootDepartment, listDepartments, pruneMissingDepartmentsFromAiosYaml } from "./departments";
-import { buildDefaultReadmeMd, ensureAutomationWorkspace, gitRun, rootDisplayNameFromYaml, readAiosYaml, syncRepoWithRemote } from "./repo";
+import { buildDefaultReadmeMd, buildDepartmentContextMd, ensureAutomationWorkspace, gitRun, rootDisplayNameFromYaml, readAiosYaml, syncRepoWithRemote } from "./repo";
 import { log } from "../log";
 import { sendNotification } from "./notifications";
 import { applyOutboxInstructions } from "./outboxInstructions";
+import { outboxInstructionsBody } from "./outboxInstructionsBody";
 
 async function writeIfChanged(path: string, content: string): Promise<boolean> {
   try {
@@ -94,6 +95,11 @@ export async function runSyncLayer(opts: { commit?: boolean } = { commit: true }
   if (rootNamePath) out.changed.push(rootNamePath);
 
   // 1. CLAUDE.md <-> AGENTS.md per department (and at repo root).
+  // Missing instruction files are bootstrap-only: create generic AIOS guidance
+  // when both provider files are absent, otherwise preserve and mirror the
+  // operator-authored file that already exists.
+  await ensureGenericProviderInstructions(root, rootDisplayNameFromYaml(yaml), out);
+  for (const dept of depts) await ensureGenericProviderInstructions(dept, dept.name, out);
   await mirrorClaudeAgents(config.repoDir, out);
   for (const dept of depts) await mirrorClaudeAgents(dept.path, out);
 
@@ -221,4 +227,55 @@ async function mirrorClaudeAgents(dir: string, out: SyncResult) {
     await copyFile(agents, claude);
     out.changed.push(claude);
   }
+}
+
+async function ensureGenericProviderInstructions(
+  scope: { name: string; path: string; isRoot?: boolean },
+  displayName: string,
+  out: SyncResult,
+) {
+  const claude = join(scope.path, "CLAUDE.md");
+  const agents = join(scope.path, "AGENTS.md");
+  if (existsSync(claude) || existsSync(agents)) return;
+
+  const body = scope.isRoot
+    ? buildGenericRootContextMd(displayName)
+    : buildDepartmentContextMd(scope.name);
+  await writeFile(claude, body, "utf-8");
+  await writeFile(agents, body, "utf-8");
+  out.changed.push(claude, agents);
+}
+
+function buildGenericRootContextMd(displayName: string): string {
+  const name = String(displayName || "Root").trim() || "Root";
+  return `# ${name} AIOS root
+
+One-line summary: Generic AIOS root workspace instructions. Add organization-specific context in \`org.md\` when available.
+
+## Scope of this repository
+- This repository is managed by AIOS as an autonomous operating workspace.
+- \`_root\` is the repository root and can be used for maintenance or cross-department work.
+- Top-level folders listed in \`aios.yaml\` are department scopes.
+
+## Local structure
+- \`cron/\`: scheduled prompts for recurring work.
+- \`goals/\`: long-running objectives or scheduled wakeups.
+- \`skills/\`: reusable local procedures.
+- \`webhooks/\`: prompt files for public webhook handlers.
+- \`outbox/\`: owner-facing notifications for dashboard, Telegram, or email delivery.
+
+## Working rules
+- Use written files in this repository as the source of truth.
+- Prefer local department files when work is scoped to one department.
+- Use \`aios.yaml\` and department folders to understand available scopes.
+- If \`org.md\` or \`_org.md\` exists, read it before cross-department work.
+
+${managedOwnerNotificationsBlock()}
+`;
+}
+
+function managedOwnerNotificationsBlock(): string {
+  return `<!-- aios:managed:owner-notifications start -->
+${outboxInstructionsBody()}
+<!-- aios:managed:owner-notifications end -->`;
 }

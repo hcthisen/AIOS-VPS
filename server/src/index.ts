@@ -20,7 +20,7 @@ import { reconcileSystemUpdateState } from "./services/systemUpdate";
 import { startTelegramAgent } from "./services/telegramAgent";
 import { startTelegramUpdates } from "./services/telegramUpdates";
 import { recoverOrphanedQueuedBacklogRuns } from "./services/executor";
-import { initCompanyContextFallback } from "./services/companies";
+import { initCompanyContextFallback, repairIncompleteRunnableCompanies } from "./services/companies";
 
 async function main() {
   const router = new Router();
@@ -54,6 +54,8 @@ async function main() {
 
   // Heartbeat kicks in automatically; it self-gates on setupPhase === "complete".
   await reconcileSystemUpdateState().catch((e) => log.warn("system update recovery check failed", String(e?.message || e)));
+  const repairedCompanies = repairIncompleteRunnableCompanies();
+  if (repairedCompanies) log.warn(`repaired ${repairedCompanies} runnable incomplete compan${repairedCompanies === 1 ? "y" : "ies"}`);
   const recoveredBacklogRuns = recoverOrphanedQueuedBacklogRuns();
   if (recoveredBacklogRuns) log.warn(`recovered ${recoveredBacklogRuns} orphaned queued backlog run(s)`);
   startHeartbeat();

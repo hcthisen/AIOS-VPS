@@ -207,7 +207,7 @@ function CompaniesSettings({ onChanged }: { onChanged: () => Promise<void> }) {
                     </div>
                   </td>
                   <td className="small muted">{company.repoFullName || "not connected"}</td>
-                  <td className="small muted">{company.isDefault ? "default" : company.setupPhase}</td>
+                  <td className="small muted">{company.isDefault ? "default" : companyStatusLabel(company)}</td>
                   <td>
                     <div className="row" style={{ justifyContent: "flex-end" }}>
                       <button
@@ -240,6 +240,11 @@ function CompaniesSettings({ onChanged }: { onChanged: () => Promise<void> }) {
 
 function shortSha(value: string | null | undefined) {
   return value ? value.slice(0, 8) : "unknown";
+}
+
+function companyStatusLabel(company: Company) {
+  if (company.setupPhase === "complete") return "runnable";
+  return `runnable (${company.setupPhase})`;
 }
 
 interface TimeSnapshot {
